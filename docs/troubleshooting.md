@@ -36,6 +36,31 @@ bun run compose:config
 
 If Compose still fails, check that `config/secrets.env` contains required keys from `config/secrets.env.example`.
 
+## Compose Reports `manifest unknown`
+
+This usually means an image tag in `deploy/compose/docker-compose.yml` does not exist in the registry.
+
+Current verified runtime tags:
+
+- `postgres:18.1-alpine`
+- `redis:8.4.5-alpine`
+- `crowdsecurity/crowdsec:v1.7.8`
+- `powerdns/pdns-auth-51:5.1.3`
+- `poweradmin/poweradmin:stable`
+- `caddy:2.10.2-alpine`
+
+Check tag regressions with:
+
+```sh
+bun test tools/compose-images.test.ts
+```
+
+Validate a tag manually:
+
+```sh
+docker manifest inspect crowdsecurity/crowdsec:v1.7.8
+```
+
 ## Port 80, 443 Or 2019 Is Already In Use
 
 The default Compose stack publishes:
