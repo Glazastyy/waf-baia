@@ -39,6 +39,7 @@ pub fn admin_api_routes() -> Vec<ApiRoute> {
         ApiRoute::new(Method::Get, "/api/rate-limits"),
         ApiRoute::new(Method::Post, "/api/rate-limits"),
         ApiRoute::new(Method::Get, "/api/dns/zones"),
+        ApiRoute::new(Method::Get, "/api/dns/records"),
         ApiRoute::new(Method::Post, "/api/dns/records"),
         ApiRoute::new(Method::Post, "/api/cloudflare/dns/plan"),
         ApiRoute::new(Method::Post, "/api/cloudflare/dns/apply"),

@@ -9,6 +9,7 @@
     type ComponentStatus
   } from './lib/config';
   import { createEmptyDashboard, dashboardSummary, type DashboardState } from './lib/dashboard';
+  import { createDnsClient, type DnsRecordType } from './lib/dns';
   import { localize, resolveLocale, supportedLocales, type Locale } from './lib/i18n';
   import { createWafRulesClient, type WafRuleAction } from './lib/waf-rules';
   import {
@@ -26,6 +27,7 @@
   const configClient = createConfigClient();
   const applicationsClient = createApplicationsClient();
   const wafRulesClient = createWafRulesClient();
+  const dnsClient = createDnsClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -52,6 +54,15 @@
   let wafRulesLoading = $state(false);
   let wafRulesSubmitting = $state(false);
   let wafRulesError = $state('');
+  let dnsZoneName = $state('');
+  let dnsRecordName = $state('');
+  let dnsRecordType = $state<DnsRecordType>('A');
+  let dnsRecordContent = $state('');
+  let dnsRecordTtl = $state(300);
+  let dnsRecordProxied = $state(false);
+  let dnsLoading = $state(false);
+  let dnsSubmitting = $state(false);
+  let dnsError = $state('');
   let currentRoute = $state<AdminRoute>(resolveAdminRoute(window.location.pathname));
   let dashboard = $state<DashboardState>(createEmptyDashboard());
   let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
@@ -175,6 +186,19 @@
     }
   }
 
+  async function loadDnsRecords(): Promise<void> {
+    dnsLoading = true;
+    dnsError = '';
+    try {
+      dashboard.dnsRecords = await dnsClient.listRecords();
+    } catch {
+      dashboard.dnsRecords = [];
+      dnsError = i18n.text('dns.loadError');
+    } finally {
+      dnsLoading = false;
+    }
+  }
+
   async function submitApplication(): Promise<void> {
     const csrfToken = authSession.csrfToken;
 
@@ -233,13 +257,46 @@
     }
   }
 
+  async function submitDnsRecord(): Promise<void> {
+    const csrfToken = authSession.csrfToken;
+
+    if (!csrfToken) {
+      dnsError = i18n.text('dns.authRequired');
+      return;
+    }
+
+    dnsSubmitting = true;
+    dnsError = '';
+    try {
+      const record = await dnsClient.createRecord(csrfToken, {
+        zoneName: dnsZoneName,
+        name: dnsRecordName,
+        recordType: dnsRecordType,
+        content: dnsRecordContent,
+        ttl: dnsRecordTtl,
+        proxied: dnsRecordProxied
+      });
+      dashboard.dnsRecords = [...dashboard.dnsRecords, record];
+      dnsZoneName = '';
+      dnsRecordName = '';
+      dnsRecordType = 'A';
+      dnsRecordContent = '';
+      dnsRecordTtl = 300;
+      dnsRecordProxied = false;
+    } catch {
+      dnsError = i18n.text('dns.saveError');
+    } finally {
+      dnsSubmitting = false;
+    }
+  }
+
   async function refreshSession(): Promise<void> {
     authLoading = true;
     try {
       authSession = await auth.session();
       if (authSession.authenticated) {
         syncAuthenticatedPath();
-        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules()]);
+        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords()]);
       } else if (window.location.pathname !== '/login') {
         replacePath('/login');
       }
@@ -258,7 +315,7 @@
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords()]);
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -280,7 +337,7 @@
       newPassword = '';
       authSession = await auth.session();
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords()]);
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -632,12 +689,56 @@
                   <h2>{i18n.text('dns.title')}</h2>
                   <p>{i18n.text('dns.description')}</p>
                 </div>
-                <button class="btn btn-primary btn-sm" type="button">
-                  <i class="bi bi-plus-lg me-1"></i>
-                  {i18n.text('dns.add')}
-                </button>
               </div>
-              {#if dashboard.dnsRecords.length === 0}
+
+              <form class="dns-form" onsubmit={(event) => { event.preventDefault(); void submitDnsRecord(); }}>
+                {#if dnsError}
+                  <div class="alert alert-danger mb-0" role="alert">{dnsError}</div>
+                {/if}
+                <div>
+                  <label class="form-label" for="dns-zone">{i18n.text('dns.zone')}</label>
+                  <input id="dns-zone" class="form-control" bind:value={dnsZoneName} required maxlength="253" />
+                </div>
+                <div>
+                  <label class="form-label" for="dns-name">{i18n.text('dns.name')}</label>
+                  <input id="dns-name" class="form-control" bind:value={dnsRecordName} required maxlength="253" />
+                </div>
+                <div>
+                  <label class="form-label" for="dns-type">Type</label>
+                  <select id="dns-type" class="form-select" bind:value={dnsRecordType}>
+                    <option value="A">A</option>
+                    <option value="AAAA">AAAA</option>
+                    <option value="CNAME">CNAME</option>
+                    <option value="TXT">TXT</option>
+                    <option value="CAA">CAA</option>
+                    <option value="MX">MX</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="dns-content">Value</label>
+                  <input id="dns-content" class="form-control" bind:value={dnsRecordContent} required maxlength="2048" />
+                </div>
+                <div>
+                  <label class="form-label" for="dns-ttl">TTL</label>
+                  <input id="dns-ttl" class="form-control" type="number" min="60" max="86400" bind:value={dnsRecordTtl} required />
+                </div>
+                <div class="form-check dns-proxy-check">
+                  <input id="dns-proxied" class="form-check-input" type="checkbox" bind:checked={dnsRecordProxied} />
+                  <label class="form-check-label" for="dns-proxied">{i18n.text('dns.proxy')}</label>
+                </div>
+                <div class="dns-form-action">
+                  <button class="btn btn-primary" type="submit" disabled={dnsSubmitting}>
+                    <i class="bi bi-plus-lg me-1"></i>
+                    {dnsSubmitting ? i18n.text('dns.saving') : i18n.text('dns.add')}
+                  </button>
+                </div>
+              </form>
+
+              {#if dnsLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('dns.loading')}></div>
+                </div>
+              {:else if dashboard.dnsRecords.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-diagram-3"></i>
                   <h3>{i18n.text('dns.emptyTitle')}</h3>
@@ -649,17 +750,21 @@
                     <thead>
                       <tr>
                         <th scope="col">Type</th>
+                        <th scope="col">{i18n.text('dns.zone')}</th>
                         <th scope="col">{i18n.text('dns.name')}</th>
                         <th scope="col">Value</th>
+                        <th scope="col">TTL</th>
                         <th scope="col">{i18n.text('dns.proxy')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {#each dashboard.dnsRecords as record (record.id)}
                         <tr>
-                          <td>{record.type}</td>
+                          <td>{record.recordType}</td>
+                          <td>{record.zoneName}</td>
                           <td>{record.name}</td>
-                          <td><code>{record.value}</code></td>
+                          <td><code>{record.content}</code></td>
+                          <td>{record.ttl}</td>
                           <td>{record.proxied ? i18n.text('dns.proxied') : i18n.text('dns.dnsOnly')}</td>
                         </tr>
                       {/each}
@@ -898,7 +1003,8 @@
   }
 
   .application-form,
-  .rule-form {
+  .rule-form,
+  .dns-form {
     padding: 1rem;
     display: grid;
     gap: 1rem;
@@ -914,15 +1020,28 @@
     grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) 8rem 10rem minmax(8rem, 1fr) auto;
   }
 
+  .dns-form {
+    grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1fr) 7rem minmax(12rem, 1.4fr) 7rem 7rem auto;
+  }
+
   .application-form .alert,
-  .rule-form .alert {
+  .rule-form .alert,
+  .dns-form .alert {
     grid-column: 1 / -1;
   }
 
   .application-form-action,
-  .rule-form-action {
+  .rule-form-action,
+  .dns-form-action {
     display: flex;
     justify-content: flex-end;
+  }
+
+  .dns-proxy-check {
+    min-height: 2.375rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
   }
 
   .empty-state {
@@ -991,12 +1110,14 @@
     }
 
     .application-form,
-    .rule-form {
+    .rule-form,
+    .dns-form {
       grid-template-columns: 1fr;
     }
 
     .application-form-action,
-    .rule-form-action {
+    .rule-form-action,
+    .dns-form-action {
       justify-content: flex-start;
     }
   }

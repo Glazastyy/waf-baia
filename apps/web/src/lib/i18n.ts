@@ -12,7 +12,7 @@ export type Locale = (typeof supportedLocales)[number]['code'];
 
 const messages = {
   'pt-BR': {
-    'nav.overview': 'Visão geral',
+    'nav.overview': 'Visao geral',
     'nav.applications': 'Aplicações',
     'nav.rules': 'Regras',
     'nav.dns': 'DNS',
@@ -130,8 +130,14 @@ const messages = {
     'dns.title': 'DNS',
     'dns.description': 'Zonas e registros reais gerenciados pelo provider configurado.',
     'dns.add': 'Adicionar registro',
+    'dns.saving': 'Salvando',
+    'dns.loading': 'Carregando registros DNS',
+    'dns.loadError': 'Não foi possível carregar os registros DNS.',
+    'dns.saveError': 'Não foi possível salvar o registro DNS. Verifique os campos e tente novamente.',
+    'dns.authRequired': 'Sessão autenticada obrigatória para criar registros DNS.',
     'dns.emptyTitle': 'Nenhum registro DNS',
     'dns.emptyDescription': 'Registros planejados ou aplicados aparecerão aqui quando uma aplicação exigir DNS.',
+    'dns.zone': 'Zona',
     'dns.name': 'Nome',
     'dns.proxy': 'Proxy',
     'dns.proxied': 'Proxy ativo',
@@ -301,7 +307,7 @@ const messages = {
     'status.disabled': 'desactivado',
   },
   de: {
-    'nav.overview': 'Übersicht',
+    'nav.overview': 'Ubersicht',
     'nav.applications': 'Anwendungen',
     'nav.rules': 'Regeln',
     'nav.dns': 'DNS',

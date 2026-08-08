@@ -434,6 +434,124 @@ async fn waf_rules_reject_invalid_action_and_missing_application() {
     assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
 }
 
+#[tokio::test]
+async fn dns_records_can_be_created_and_listed_without_sample_data() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let empty_records = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/dns/records")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(empty_records.status(), StatusCode::OK);
+    assert_eq!(response_json(empty_records).await["items"], serde_json::json!([]));
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/dns/records")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"zoneName":"example.com","name":"portal.example.com","recordType":"A","content":"10.0.0.20","ttl":300,"proxied":false}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = response_json(created).await;
+    assert_eq!(created_body["zoneName"], "example.com");
+    assert_eq!(created_body["name"], "portal.example.com");
+    assert_eq!(created_body["recordType"], "A");
+    assert_eq!(created_body["content"], "10.0.0.20");
+    assert_eq!(created_body["ttl"], 300);
+    assert_eq!(created_body["proxied"], false);
+
+    let listed_records = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/dns/records")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+    let listed_body = response_json(listed_records).await;
+    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(listed_body["items"][0]["name"], "portal.example.com");
+
+    let listed_zones = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/dns/zones")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+    let zones_body = response_json(listed_zones).await;
+    assert_eq!(zones_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(zones_body["items"][0]["name"], "example.com");
+}
+
+#[tokio::test]
+async fn dns_records_reject_invalid_input_without_mutating_state() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/dns/records")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"zoneName":"bad zone","name":"","recordType":"TXT","content":"","ttl":30,"proxied":false}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/dns/records")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)

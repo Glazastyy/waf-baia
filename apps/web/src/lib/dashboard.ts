@@ -1,7 +1,9 @@
 import type { Application } from './applications';
+import type { DnsRecord } from './dns';
 import type { WafRule } from './waf-rules';
 
 export type { Application } from './applications';
+export type { DnsRecord } from './dns';
 export type { WafRule } from './waf-rules';
 
 export type Certificate = {
@@ -10,14 +12,6 @@ export type Certificate = {
   issuer: string;
   status: string;
   renewal: string | null;
-};
-
-export type DnsRecord = {
-  id: string;
-  type: string;
-  name: string;
-  value: string;
-  proxied: boolean;
 };
 
 export type AuditEvent = {

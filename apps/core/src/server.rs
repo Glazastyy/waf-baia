@@ -35,6 +35,8 @@ struct AppState {
     throttles: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     applications: Arc<Mutex<Vec<ApplicationRecord>>>,
     waf_rules: Arc<Mutex<Vec<WafRuleRecord>>>,
+    dns_zones: Arc<Mutex<Vec<DnsZoneRecord>>>,
+    dns_records: Arc<Mutex<Vec<DnsRecordRecord>>>,
     secure_cookies: bool,
     platform_config: PlatformConfig,
 }
@@ -98,6 +100,35 @@ enum WafRuleAction {
     Log,
 }
 
+#[derive(Clone)]
+struct DnsZoneRecord {
+    id: String,
+    provider: String,
+    name: String,
+}
+
+#[derive(Clone)]
+struct DnsRecordRecord {
+    id: String,
+    zone_id: String,
+    zone_name: String,
+    name: String,
+    record_type: DnsRecordType,
+    content: String,
+    ttl: u32,
+    proxied: bool,
+}
+
+#[derive(Clone)]
+enum DnsRecordType {
+    A,
+    Aaaa,
+    Cname,
+    Txt,
+    Caa,
+    Mx,
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginRequest {
     username: String,
@@ -134,6 +165,17 @@ struct CreateWafRuleRequest {
     priority: u32,
     action: String,
     path_prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateDnsRecordRequest {
+    zone_name: String,
+    name: String,
+    record_type: String,
+    content: String,
+    ttl: u32,
+    proxied: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,6 +285,39 @@ struct WafRuleResponse {
     enabled: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsZoneListResponse {
+    items: Vec<DnsZoneResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsZoneResponse {
+    id: String,
+    provider: String,
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsRecordListResponse {
+    items: Vec<DnsRecordResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsRecordResponse {
+    id: String,
+    zone_id: String,
+    zone_name: String,
+    name: String,
+    record_type: &'static str,
+    content: String,
+    ttl: u32,
+    proxied: bool,
+}
+
 impl ServerConfig {
     pub fn from_env() -> Self {
         let bind_addr = std::env::var("BAIA_CORE_BIND")
@@ -292,6 +367,8 @@ pub fn build_router(config: ServerConfig) -> Router {
         throttles: Arc::new(Mutex::new(HashMap::new())),
         applications: Arc::new(Mutex::new(Vec::new())),
         waf_rules: Arc::new(Mutex::new(Vec::new())),
+        dns_zones: Arc::new(Mutex::new(Vec::new())),
+        dns_records: Arc::new(Mutex::new(Vec::new())),
         secure_cookies: config.secure_cookies,
         platform_config: config.platform_config,
     };
@@ -325,8 +402,8 @@ pub fn build_router(config: ServerConfig) -> Router {
             "/api/rate-limits",
             get(authenticated_json).post(authenticated_no_content),
         )
-        .route("/api/dns/zones", get(authenticated_json))
-        .route("/api/dns/records", post(authenticated_no_content))
+        .route("/api/dns/zones", get(dns_zones_index))
+        .route("/api/dns/records", get(dns_records_index).post(dns_records_create))
         .route("/api/cloudflare/dns/plan", post(authenticated_json))
         .route("/api/cloudflare/dns/apply", post(authenticated_no_content))
         .route("/api/cloudflare/acme-cas", get(authenticated_json))
@@ -608,6 +685,75 @@ async fn waf_rules_create(
     (StatusCode::CREATED, Json(waf_rule_response(rule))).into_response()
 }
 
+async fn dns_zones_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let zones = state
+        .dns_zones
+        .lock()
+        .expect("dns zones lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(dns_zone_response)
+        .collect();
+
+    Json(DnsZoneListResponse { items: zones }).into_response()
+}
+
+async fn dns_records_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let records = state
+        .dns_records
+        .lock()
+        .expect("dns records lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(dns_record_response)
+        .collect();
+
+    Json(DnsRecordListResponse { items: records }).into_response()
+}
+
+async fn dns_records_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDnsRecordRequest>,
+) -> Response {
+    let Some(session) = require_session(&state, &headers) else {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+
+    if !valid_csrf(&headers, &session) {
+        return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
+    }
+
+    let Ok(mut record) = dns_record_from_request(request) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "DNS record input is invalid");
+    };
+
+    let mut zones = state
+        .dns_zones
+        .lock()
+        .expect("dns zones lock must not be poisoned");
+    let zone = ensure_dns_zone(&mut zones, &record.zone_name);
+    record.zone_id = zone.id.clone();
+    record.zone_name = zone.name.clone();
+    drop(zones);
+
+    state
+        .dns_records
+        .lock()
+        .expect("dns records lock must not be poisoned")
+        .push(record.clone());
+
+    (StatusCode::CREATED, Json(dns_record_response(record))).into_response()
+}
+
 async fn authenticated_no_content(State(state): State<AppState>, headers: HeaderMap) -> Response {
     authenticated_mutation(state, headers)
 }
@@ -816,6 +962,90 @@ impl WafRuleAction {
     }
 }
 
+fn dns_record_from_request(
+    request: CreateDnsRecordRequest,
+) -> Result<DnsRecordRecord, DnsRecordValidationError> {
+    let zone_name = normalized_hostname(&request.zone_name).ok_or(DnsRecordValidationError)?;
+    let name = normalized_hostname(&request.name).ok_or(DnsRecordValidationError)?;
+    let record_type = dns_record_type(&request.record_type).ok_or(DnsRecordValidationError)?;
+    let content = normalized_dns_content(&request.content).ok_or(DnsRecordValidationError)?;
+
+    if request.ttl < 60 || request.ttl > 86_400 {
+        return Err(DnsRecordValidationError);
+    }
+
+    Ok(DnsRecordRecord {
+        id: random_token(24),
+        zone_id: String::new(),
+        zone_name,
+        name,
+        record_type,
+        content,
+        ttl: request.ttl,
+        proxied: request.proxied.unwrap_or(false),
+    })
+}
+
+fn ensure_dns_zone(zones: &mut Vec<DnsZoneRecord>, zone_name: &str) -> DnsZoneRecord {
+    if let Some(zone) = zones.iter().find(|zone| zone.name == zone_name) {
+        return zone.clone();
+    }
+
+    let zone = DnsZoneRecord {
+        id: random_token(24),
+        provider: "powerdns".to_string(),
+        name: zone_name.to_string(),
+    };
+    zones.push(zone.clone());
+    zone
+}
+
+fn dns_zone_response(zone: DnsZoneRecord) -> DnsZoneResponse {
+    DnsZoneResponse {
+        id: zone.id,
+        provider: zone.provider,
+        name: zone.name,
+    }
+}
+
+fn dns_record_response(record: DnsRecordRecord) -> DnsRecordResponse {
+    DnsRecordResponse {
+        id: record.id,
+        zone_id: record.zone_id,
+        zone_name: record.zone_name,
+        name: record.name,
+        record_type: record.record_type.as_str(),
+        content: record.content,
+        ttl: record.ttl,
+        proxied: record.proxied,
+    }
+}
+
+fn dns_record_type(value: &str) -> Option<DnsRecordType> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "A" => Some(DnsRecordType::A),
+        "AAAA" => Some(DnsRecordType::Aaaa),
+        "CNAME" => Some(DnsRecordType::Cname),
+        "TXT" => Some(DnsRecordType::Txt),
+        "CAA" => Some(DnsRecordType::Caa),
+        "MX" => Some(DnsRecordType::Mx),
+        _ => None,
+    }
+}
+
+impl DnsRecordType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            DnsRecordType::A => "A",
+            DnsRecordType::Aaaa => "AAAA",
+            DnsRecordType::Cname => "CNAME",
+            DnsRecordType::Txt => "TXT",
+            DnsRecordType::Caa => "CAA",
+            DnsRecordType::Mx => "MX",
+        }
+    }
+}
+
 fn normalized_name(value: &str) -> Option<String> {
     let normalized = value.trim();
 
@@ -872,11 +1102,24 @@ fn normalized_path_prefix(value: &str) -> Result<Option<String>, WafRuleValidati
     Ok(Some(path.to_string()))
 }
 
+fn normalized_dns_content(value: &str) -> Option<String> {
+    let content = value.trim();
+
+    if content.is_empty() || content.len() > 2048 || content.bytes().any(|byte| byte.is_ascii_control()) {
+        return None;
+    }
+
+    Some(content.to_string())
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ApplicationValidationError;
 
 #[derive(Debug, Clone, Copy)]
 struct WafRuleValidationError;
+
+#[derive(Debug, Clone, Copy)]
+struct DnsRecordValidationError;
 
 fn require_session(state: &AppState, headers: &HeaderMap) -> Option<Session> {
     let session_id = session_cookie_value(headers)?;
