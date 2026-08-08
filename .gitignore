@@ -6,5 +6,6 @@ dist/
 !.env.example
 config/secrets.env
 config/platform.yaml
+config/generated/
 *.log
 .DS_Store

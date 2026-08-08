@@ -65,6 +65,7 @@ describe('compose up helper', () => {
         '--detach'
       ]
     ]);
+    expect(output).toContain('generated config/generated/Caddyfile');
     expect(output.at(-5)).toBe('Baia WAF access');
     expect(output.at(-4)).toBe('Admin URL: https://admin.example.test/login');
     expect(output.at(-3)).toBe('Admin user: admin');

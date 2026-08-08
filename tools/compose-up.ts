@@ -3,6 +3,7 @@ import { access, appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { runSetup } from './setup';
+import { writeGeneratedCaddyfile } from './caddyfile';
 
 export type ComposeUpOptions = {
   root?: string;
@@ -45,6 +46,8 @@ export async function runComposeUp(options: ComposeUpOptions = {}): Promise<void
   }
 
   await ensureInitialAdminPassword(root);
+  const caddyfile = await writeGeneratedCaddyfile(root);
+  writeLine(`generated ${caddyfile}`);
 
   const exitCode = await runCommand(composeCommand, root);
 

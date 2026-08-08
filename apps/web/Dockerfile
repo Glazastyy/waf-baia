@@ -8,4 +8,5 @@ RUN bun run --cwd apps/web build
 
 FROM caddy:2.11.4-alpine
 COPY --from=builder /workspace/apps/web/dist /usr/share/caddy
+COPY apps/web/Caddyfile /etc/caddy/Caddyfile
 EXPOSE 80
