@@ -130,6 +130,7 @@ GET /api/components
 GET /api/configuration
 PATCH /api/configuration
 POST /api/configuration/apply
+POST /api/configuration/reload
 GET /api/users
 POST /api/users
 GET /api/applications
@@ -155,7 +156,9 @@ A API deve retornar erros sem detalhes internos, exigir CSRF quando cookies fore
 
 Secrets não entram no YAML público; o YAML referencia nomes de variáveis como `BAIA_POWERDNS_API_KEY`.
 
-O objetivo operacional é que `config/platform.yaml` e `config/secrets.env` sejam somente o bootstrap local. Depois do primeiro start, o Core deve ser a superfície principal de configuração, como acontece em plataformas self-hosted maduras: o painel altera estado validado, o Core grava configuração persistente, mascara secrets, audita a mudança e aplica o componente correto quando possível.
+O objetivo operacional é que `config/platform.yaml` e `config/secrets.env` sejam o bootstrap local e também uma representação auditável da configuração efetiva. Depois do primeiro start, o Core deve ser a superfície principal de configuração, como acontece em plataformas self-hosted maduras: o painel altera estado validado, o Core grava configuração persistente, mascara secrets, audita a mudança e aplica o componente correto quando possível.
+
+Sincronização bidirecional é obrigatória. Mudanças feitas pelo painel passam por `PATCH /api/configuration`, são validadas e persistidas de volta em `config/platform.yaml` antes do apply. Mudanças feitas manualmente no arquivo podem ser carregadas por `POST /api/configuration/reload`; o Core valida o YAML, rejeita estados inválidos sem aplicar e atualiza o painel com a versão carregada. Secrets continuam fora do YAML público e entram por `config/secrets.env` ou provider de secrets.
 
 Cada componente tem um descritor no Core com settings, secrets, capacidades e modo de aplicação:
 

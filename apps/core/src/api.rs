@@ -29,6 +29,7 @@ pub fn admin_api_routes() -> Vec<ApiRoute> {
         ApiRoute::new(Method::Get, "/api/configuration"),
         ApiRoute::new(Method::Patch, "/api/configuration"),
         ApiRoute::new(Method::Post, "/api/configuration/apply"),
+        ApiRoute::new(Method::Post, "/api/configuration/reload"),
         ApiRoute::new(Method::Get, "/api/users"),
         ApiRoute::new(Method::Post, "/api/users"),
         ApiRoute::new(Method::Get, "/api/applications"),

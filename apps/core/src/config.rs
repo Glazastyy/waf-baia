@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlatformConfig {
     pub platform: PlatformSection,
     pub modules: ModuleSection,
@@ -10,12 +13,14 @@ pub struct PlatformConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlatformSection {
     pub public_url: String,
     pub admin_hostname: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModuleSection {
     pub acme: ModuleToggle,
     pub crowdsec: ModuleToggle,
@@ -29,11 +34,13 @@ pub struct ModuleSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModuleToggle {
     pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceSection {
     pub postgres: NetworkService,
     pub redis: NetworkService,
@@ -41,12 +48,14 @@ pub struct ServiceSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkService {
     pub host: String,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntegrationSection {
     pub powerdns: PowerDnsIntegration,
     pub cloudflare: CloudflareIntegration,
@@ -54,6 +63,7 @@ pub struct IntegrationSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PowerDnsIntegration {
     pub mode: PowerDnsMode,
     pub api_url: Option<String>,
@@ -61,12 +71,14 @@ pub struct PowerDnsIntegration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PowerDnsMode {
     Integrated,
     External,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudflareIntegration {
     pub api_token_env: Option<String>,
     pub account_id: Option<String>,
@@ -74,6 +86,7 @@ pub struct CloudflareIntegration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudflareAutomaticDnsConfig {
     pub enabled: bool,
     pub default_proxied: bool,
@@ -81,17 +94,20 @@ pub struct CloudflareAutomaticDnsConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CrowdSecIntegration {
     pub local_api_url: Option<String>,
     pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TlsSection {
     pub acme: AcmeConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcmeConfig {
     pub email_env: String,
     pub http01_enabled: bool,
@@ -100,6 +116,7 @@ pub struct AcmeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DnsProvider {
     PowerDns,
     Cloudflare,
@@ -113,6 +130,60 @@ pub enum ConfigValidationError {
     MissingCrowdSecApiUrl,
     MissingCrowdSecApiKeyEnv,
     WildcardAcmeRequiresDnsProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSyncError {
+    Read(String),
+    Write(String),
+    Parse(String),
+    Serialize(String),
+    Validation(ConfigValidationError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigFileStore {
+    path: PathBuf,
+}
+
+impl ConfigFileStore {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+
+    pub fn load(&self) -> Result<PlatformConfig, ConfigSyncError> {
+        let raw = fs::read_to_string(&self.path)
+            .map_err(|error| ConfigSyncError::Read(error.to_string()))?;
+        let config = yaml_serde::from_str::<PlatformConfig>(&raw)
+            .map_err(|error| ConfigSyncError::Parse(error.to_string()))?;
+        config.validate().map_err(ConfigSyncError::Validation)?;
+        Ok(config)
+    }
+
+    pub fn save(&self, config: &PlatformConfig) -> Result<(), ConfigSyncError> {
+        config.validate().map_err(ConfigSyncError::Validation)?;
+        let raw = yaml_serde::to_string(config)
+            .map_err(|error| ConfigSyncError::Serialize(error.to_string()))?;
+        self.write_atomically(&raw)
+    }
+
+    fn write_atomically(&self, raw: &str) -> Result<(), ConfigSyncError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|error| ConfigSyncError::Write(error.to_string()))?;
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("platform.yaml");
+        let temporary_path = parent.join(format!(".{file_name}.tmp"));
+        fs::write(&temporary_path, raw)
+            .map_err(|error| ConfigSyncError::Write(error.to_string()))?;
+        fs::rename(&temporary_path, &self.path)
+            .map_err(|error| ConfigSyncError::Write(error.to_string()))?;
+        Ok(())
+    }
 }
 
 impl PlatformConfig {

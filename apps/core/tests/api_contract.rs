@@ -9,6 +9,7 @@ fn api_contract_exposes_expected_initial_resources() {
     assert!(routes.contains(&ApiRoute::new(Method::Get, "/api/components")));
     assert!(routes.contains(&ApiRoute::new(Method::Patch, "/api/configuration")));
     assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/configuration/apply")));
+    assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/configuration/reload")));
     assert!(routes.contains(&ApiRoute::new(Method::Get, "/api/applications")));
     assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/waf/rules")));
     assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/cloudflare/dns/plan")));
