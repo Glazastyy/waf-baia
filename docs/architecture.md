@@ -118,6 +118,10 @@ GET /api/health
 POST /api/auth/login
 POST /api/auth/change-password
 POST /api/auth/logout
+GET /api/components
+GET /api/configuration
+PATCH /api/configuration
+POST /api/configuration/apply
 GET /api/users
 POST /api/users
 GET /api/applications
@@ -143,6 +147,20 @@ A API deve retornar erros sem detalhes internos, exigir CSRF quando cookies fore
 
 Secrets não entram no YAML público; o YAML referencia nomes de variáveis como `BAIA_POWERDNS_API_KEY`.
 
+O objetivo operacional é que `config/platform.yaml` e `config/secrets.env` sejam somente o bootstrap local. Depois do primeiro start, o Core deve ser a superfície principal de configuração, como acontece em plataformas self-hosted maduras: o painel altera estado validado, o Core grava configuração persistente, mascara secrets, audita a mudança e aplica o componente correto quando possível.
+
+Cada componente tem um descritor no Core com settings, secrets, capacidades e modo de aplicação:
+
+`HotReload`: alteração aplicada sem reiniciar container, como Caddy via Admin API JSON.
+
+`ExternalApi`: alteração enviada para API de provider ou serviço, como PowerDNS, Cloudflare e CrowdSec.
+
+`RestartRequired`: alteração estrutural que exige recriação ou reinício coordenado, como host/porta de PostgreSQL e Redis.
+
+`NoRuntimeApply`: ajuste apenas visual ou já resolvido pelo cliente, como preferências locais do painel.
+
+O painel deve consumir `GET /api/components` para renderizar módulos, estado de saúde, pendências, secrets ausentes, ações disponíveis e avisos de risco sem exigir edição manual de arquivos.
+
 ## 12. Estratégia de Autenticação e Bootstrap do Primeiro Administrador
 
 O Core verifica se existe usuário admin. Se não existir, gera usuário `admin`, senha temporária criptograficamente aleatória e hash Argon2id. A senha é exposta apenas uma vez para log inicial. O primeiro login marca a sessão como `password_change_required`, exige troca de senha e cadastro de e-mail antes de liberar o painel.
@@ -152,6 +170,8 @@ O Core verifica se existe usuário admin. Se não existir, gera usuário `admin`
 Modo integrado: Compose sobe PowerDNS Authoritative, banco PostgreSQL dedicado e PowerAdmin. O Core usa a API local do PowerDNS para criar zonas e registros.
 
 Modo externo: o Core recebe URL e API key via configuração/secret e usa o mesmo cliente HTTP, com allowlist de host e timeout explícito.
+
+A configuração operacional do PowerDNS é feita pela API HTTP nativa com `X-API-Key`. O Core deve gerenciar zonas, RRsets, DNSSEC e testes de conectividade; o PowerAdmin permanece opcional para diagnóstico manual, não como caminho principal.
 
 ## 14. Integração com Cloudflare
 
@@ -164,6 +184,8 @@ O Core também mantém um catálogo de CAs ACME conhecidas para sugerir o domín
 ## 15. Integração com CrowdSec
 
 CrowdSec fornece reputação e decisões. O Caddy bouncer aplica bloqueios no caminho de requisição. O Core consulta a Local API para exibição, remoção autorizada de decisões e auditoria. Logs do Caddy alimentam a coleção `crowdsecurity/caddy`.
+
+O Core deve tratar decisões, bouncers, coleções, allowlists e estado da Local API como recursos administrativos. Tokens ficam em secrets, ações sensíveis exigem RBAC e auditoria, e o painel mostra se o bouncer do Caddy está sincronizado.
 
 ## 16. Estratégia de ACME
 

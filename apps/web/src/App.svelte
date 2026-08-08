@@ -37,6 +37,16 @@
     caaDomain: string;
   };
 
+  type ApplyMode = 'hotReload' | 'restartRequired' | 'externalApi' | 'noRuntimeApply';
+
+  type ManagedComponent = {
+    name: string;
+    scope: string;
+    applyMode: ApplyMode;
+    coreManaged: boolean;
+    capabilities: string[];
+  };
+
   const languageStorageKey = 'baia.locale';
   const initialLocale = resolveLocale(localStorage.getItem(languageStorageKey) ?? navigator.language);
   persistLocale(initialLocale);
@@ -103,6 +113,17 @@
     { name: 'Buypass', caaDomain: 'buypass.com' }
   ]);
 
+  let managedComponents = $state<ManagedComponent[]>([
+    { name: 'Core', scope: 'Configuration, RBAC, audit, jobs', applyMode: 'hotReload', coreManaged: true, capabilities: ['API', 'RBAC', 'Audit'] },
+    { name: 'Caddy', scope: 'Reverse proxy, TLS, WAF', applyMode: 'hotReload', coreManaged: true, capabilities: ['Admin API', 'Routes', 'TLS'] },
+    { name: 'PowerDNS', scope: 'Authoritative DNS', applyMode: 'externalApi', coreManaged: true, capabilities: ['Zones', 'Records', 'DNSSEC'] },
+    { name: 'Cloudflare', scope: 'External DNS and proxy', applyMode: 'externalApi', coreManaged: false, capabilities: ['A/AAAA', 'CAA', 'Proxy'] },
+    { name: 'CrowdSec', scope: 'Decisions and remediation', applyMode: 'externalApi', coreManaged: true, capabilities: ['Decisions', 'Bouncers', 'AppSec'] },
+    { name: 'PostgreSQL', scope: 'Persistent state', applyMode: 'restartRequired', coreManaged: true, capabilities: ['Migrations', 'Audit storage'] },
+    { name: 'Redis', scope: 'Sessions, locks, cache', applyMode: 'restartRequired', coreManaged: true, capabilities: ['Locks', 'Sessions', 'Rate state'] },
+    { name: 'ACME', scope: 'Certificates and renewals', applyMode: 'hotReload', coreManaged: true, capabilities: ['HTTP-01', 'DNS-01', 'CAA'] }
+  ]);
+
   function statusClass(status: ServiceStatus): string {
     if (status === 'healthy') {
       return 'text-bg-success';
@@ -123,6 +144,22 @@
     const nextLocale = resolveLocale(value);
     locale = nextLocale;
     persistLocale(nextLocale);
+  }
+
+  function applyModeLabel(mode: ApplyMode): string {
+    if (mode === 'hotReload') {
+      return i18n.text('components.hotReload');
+    }
+
+    if (mode === 'restartRequired') {
+      return i18n.text('components.restartRequired');
+    }
+
+    if (mode === 'externalApi') {
+      return i18n.text('components.externalApi');
+    }
+
+    return i18n.text('components.noRuntimeApply');
   }
 
   function persistLocale(nextLocale: Locale): void {
@@ -320,6 +357,46 @@
                   {/each}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="col-12">
+        <div class="card shadow-sm">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">{i18n.text('components.title')}</span>
+            <button class="btn btn-outline-secondary btn-sm" type="button" title={i18n.text('services.refresh')}>
+              <i class="bi bi-arrow-clockwise"></i>
+            </button>
+          </div>
+          <div class="card-body">
+            <p class="text-body-secondary small mb-3">{i18n.text('components.description')}</p>
+            <div class="row g-3">
+              {#each managedComponents as component (component.name)}
+                <div class="col-12 col-md-6 col-xl-3">
+                  <div class="border rounded-2 h-100 p-3 bg-body">
+                    <div class="d-flex justify-content-between gap-2">
+                      <div>
+                        <div class="fw-semibold">{component.name}</div>
+                        <div class="text-body-secondary small">{component.scope}</div>
+                      </div>
+                      <span class={`badge align-self-start ${component.coreManaged ? 'text-bg-primary' : 'text-bg-secondary'}`}>
+                        {component.coreManaged ? i18n.text('components.coreManaged') : i18n.text('components.externalManaged')}
+                      </span>
+                    </div>
+                    <div class="small mt-3">
+                      <span class="text-body-secondary">{i18n.text('components.applyMode')}:</span>
+                      <span class="fw-semibold">{applyModeLabel(component.applyMode)}</span>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1 mt-3">
+                      {#each component.capabilities as capability (`${component.name}:${capability}`)}
+                        <span class="badge text-bg-light border">{capability}</span>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+              {/each}
             </div>
           </div>
         </div>
