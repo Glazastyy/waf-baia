@@ -35,6 +35,7 @@ struct AppState {
     throttles: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     applications: Arc<Mutex<Vec<ApplicationRecord>>>,
     waf_rules: Arc<Mutex<Vec<WafRuleRecord>>>,
+    rate_limits: Arc<Mutex<Vec<RateLimitRecord>>>,
     dns_zones: Arc<Mutex<Vec<DnsZoneRecord>>>,
     dns_records: Arc<Mutex<Vec<DnsRecordRecord>>>,
     certificates: Arc<Mutex<Vec<CertificateRecord>>>,
@@ -99,6 +100,26 @@ enum WafRuleAction {
     Block,
     Challenge,
     RateLimit,
+    Log,
+}
+
+#[derive(Clone)]
+struct RateLimitRecord {
+    id: String,
+    name: String,
+    application_id: Option<String>,
+    application_name: Option<String>,
+    path_prefix: Option<String>,
+    requests: u32,
+    window_seconds: u32,
+    action: RateLimitAction,
+    enabled: bool,
+}
+
+#[derive(Clone)]
+enum RateLimitAction {
+    Block,
+    Challenge,
     Log,
 }
 
@@ -203,6 +224,17 @@ struct CreateWafRuleRequest {
     priority: u32,
     action: String,
     path_prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateRateLimitRequest {
+    name: String,
+    application_id: Option<String>,
+    path_prefix: Option<String>,
+    requests: u32,
+    window_seconds: u32,
+    action: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,6 +367,26 @@ struct WafRuleResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RateLimitListResponse {
+    items: Vec<RateLimitResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RateLimitResponse {
+    id: String,
+    name: String,
+    application_id: Option<String>,
+    application_name: Option<String>,
+    path_prefix: Option<String>,
+    requests: u32,
+    window_seconds: u32,
+    action: &'static str,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DnsZoneListResponse {
     items: Vec<DnsZoneResponse>,
 }
@@ -451,6 +503,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         throttles: Arc::new(Mutex::new(HashMap::new())),
         applications: Arc::new(Mutex::new(Vec::new())),
         waf_rules: Arc::new(Mutex::new(Vec::new())),
+        rate_limits: Arc::new(Mutex::new(Vec::new())),
         dns_zones: Arc::new(Mutex::new(Vec::new())),
         dns_records: Arc::new(Mutex::new(Vec::new())),
         certificates: Arc::new(Mutex::new(Vec::new())),
@@ -486,7 +539,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         )
         .route(
             "/api/rate-limits",
-            get(authenticated_json).post(authenticated_no_content),
+            get(rate_limits_index).post(rate_limits_create),
         )
         .route("/api/dns/zones", get(dns_zones_index))
         .route("/api/dns/records", get(dns_records_index).post(dns_records_create))
@@ -785,6 +838,62 @@ async fn waf_rules_create(
     );
 
     (StatusCode::CREATED, Json(waf_rule_response(rule))).into_response()
+}
+
+async fn rate_limits_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let rate_limits = state
+        .rate_limits
+        .lock()
+        .expect("rate limits lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(rate_limit_response)
+        .collect();
+
+    Json(RateLimitListResponse { items: rate_limits }).into_response()
+}
+
+async fn rate_limits_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateRateLimitRequest>,
+) -> Response {
+    let Some(session) = require_session(&state, &headers) else {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+
+    if !valid_csrf(&headers, &session) {
+        return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
+    }
+
+    let applications = state
+        .applications
+        .lock()
+        .expect("applications lock must not be poisoned");
+    let Ok(rate_limit) = rate_limit_from_request(request, &applications) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "Rate limit input is invalid");
+    };
+    drop(applications);
+
+    state
+        .rate_limits
+        .lock()
+        .expect("rate limits lock must not be poisoned")
+        .push(rate_limit.clone());
+    record_audit_event(
+        &state,
+        &session.username,
+        "rate_limit.create",
+        "rate_limit",
+        &rate_limit.id,
+        "success",
+    );
+
+    (StatusCode::CREATED, Json(rate_limit_response(rate_limit))).into_response()
 }
 
 async fn dns_zones_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1148,6 +1257,74 @@ impl WafRuleAction {
     }
 }
 
+fn rate_limit_from_request(
+    request: CreateRateLimitRequest,
+    applications: &[ApplicationRecord],
+) -> Result<RateLimitRecord, RateLimitValidationError> {
+    let name = normalized_name(&request.name).ok_or(RateLimitValidationError)?;
+    let path_prefix = match request.path_prefix.as_deref() {
+        Some(value) => normalized_path_prefix(value).map_err(|_| RateLimitValidationError)?,
+        None => None,
+    };
+    let action = rate_limit_action(&request.action).ok_or(RateLimitValidationError)?;
+    let (application_id, application_name) =
+        resolve_rule_application(request.application_id, applications)
+            .map_err(|_| RateLimitValidationError)?;
+
+    if request.requests == 0
+        || request.requests > 1_000_000
+        || request.window_seconds < 10
+        || request.window_seconds > 86_400
+    {
+        return Err(RateLimitValidationError);
+    }
+
+    Ok(RateLimitRecord {
+        id: random_token(24),
+        name,
+        application_id,
+        application_name,
+        path_prefix,
+        requests: request.requests,
+        window_seconds: request.window_seconds,
+        action,
+        enabled: true,
+    })
+}
+
+fn rate_limit_response(rate_limit: RateLimitRecord) -> RateLimitResponse {
+    RateLimitResponse {
+        id: rate_limit.id,
+        name: rate_limit.name,
+        application_id: rate_limit.application_id,
+        application_name: rate_limit.application_name,
+        path_prefix: rate_limit.path_prefix,
+        requests: rate_limit.requests,
+        window_seconds: rate_limit.window_seconds,
+        action: rate_limit.action.as_str(),
+        enabled: rate_limit.enabled,
+    }
+}
+
+fn rate_limit_action(value: &str) -> Option<RateLimitAction> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "block" => Some(RateLimitAction::Block),
+        "challenge" => Some(RateLimitAction::Challenge),
+        "log" => Some(RateLimitAction::Log),
+        _ => None,
+    }
+}
+
+impl RateLimitAction {
+    fn as_str(&self) -> &'static str {
+        match self {
+            RateLimitAction::Block => "block",
+            RateLimitAction::Challenge => "challenge",
+            RateLimitAction::Log => "log",
+        }
+    }
+}
+
 fn dns_record_from_request(
     request: CreateDnsRecordRequest,
 ) -> Result<DnsRecordRecord, DnsRecordValidationError> {
@@ -1419,6 +1596,9 @@ struct ApplicationValidationError;
 
 #[derive(Debug, Clone, Copy)]
 struct WafRuleValidationError;
+
+#[derive(Debug, Clone, Copy)]
+struct RateLimitValidationError;
 
 #[derive(Debug, Clone, Copy)]
 struct DnsRecordValidationError;

@@ -17,6 +17,7 @@
   import { createEmptyDashboard, dashboardSummary, type DashboardState } from './lib/dashboard';
   import { createDnsClient, type DnsRecordType } from './lib/dns';
   import { localize, resolveLocale, supportedLocales, type Locale } from './lib/i18n';
+  import { createRateLimitsClient, type RateLimitAction } from './lib/rate-limits';
   import { createWafRulesClient, type WafRuleAction } from './lib/waf-rules';
   import {
     adminNavigation,
@@ -36,6 +37,7 @@
   const dnsClient = createDnsClient();
   const auditClient = createAuditClient();
   const certificatesClient = createCertificatesClient();
+  const rateLimitsClient = createRateLimitsClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -62,6 +64,15 @@
   let wafRulesLoading = $state(false);
   let wafRulesSubmitting = $state(false);
   let wafRulesError = $state('');
+  let rateLimitName = $state('');
+  let rateLimitApplicationId = $state('');
+  let rateLimitPathPrefix = $state('');
+  let rateLimitRequests = $state(100);
+  let rateLimitWindowSeconds = $state(60);
+  let rateLimitAction = $state<RateLimitAction>('block');
+  let rateLimitsLoading = $state(false);
+  let rateLimitsSubmitting = $state(false);
+  let rateLimitsError = $state('');
   let dnsZoneName = $state('');
   let dnsRecordName = $state('');
   let dnsRecordType = $state<DnsRecordType>('A');
@@ -204,6 +215,19 @@
     }
   }
 
+  async function loadRateLimits(): Promise<void> {
+    rateLimitsLoading = true;
+    rateLimitsError = '';
+    try {
+      dashboard.rateLimits = await rateLimitsClient.list();
+    } catch {
+      dashboard.rateLimits = [];
+      rateLimitsError = i18n.text('rateLimits.loadError');
+    } finally {
+      rateLimitsLoading = false;
+    }
+  }
+
   async function loadDnsRecords(): Promise<void> {
     dnsLoading = true;
     dnsError = '';
@@ -303,6 +327,40 @@
     }
   }
 
+  async function submitRateLimit(): Promise<void> {
+    const csrfToken = authSession.csrfToken;
+
+    if (!csrfToken) {
+      rateLimitsError = i18n.text('rateLimits.authRequired');
+      return;
+    }
+
+    rateLimitsSubmitting = true;
+    rateLimitsError = '';
+    try {
+      const rateLimit = await rateLimitsClient.create(csrfToken, {
+        name: rateLimitName,
+        applicationId: rateLimitApplicationId || null,
+        pathPrefix: rateLimitPathPrefix || null,
+        requests: rateLimitRequests,
+        windowSeconds: rateLimitWindowSeconds,
+        action: rateLimitAction
+      });
+      dashboard.rateLimits = [...dashboard.rateLimits, rateLimit];
+      rateLimitName = '';
+      rateLimitApplicationId = '';
+      rateLimitPathPrefix = '';
+      rateLimitRequests = 100;
+      rateLimitWindowSeconds = 60;
+      rateLimitAction = 'block';
+      await loadAuditEvents();
+    } catch {
+      rateLimitsError = i18n.text('rateLimits.saveError');
+    } finally {
+      rateLimitsSubmitting = false;
+    }
+  }
+
   async function submitDnsRecord(): Promise<void> {
     const csrfToken = authSession.csrfToken;
 
@@ -375,7 +433,7 @@
       authSession = await auth.session();
       if (authSession.authenticated) {
         syncAuthenticatedPath();
-        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
+        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadRateLimits(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
       } else if (window.location.pathname !== '/login') {
         replacePath('/login');
       }
@@ -394,7 +452,7 @@
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadRateLimits(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -416,7 +474,7 @@
       newPassword = '';
       authSession = await auth.session();
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadRateLimits(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -544,6 +602,10 @@
               <div class="metric-card">
                 <span>{i18n.text('metrics.activeRules')}</span>
                 <strong>{summary.activeRules}</strong>
+              </div>
+              <div class="metric-card">
+                <span>{i18n.text('metrics.rateLimits')}</span>
+                <strong>{summary.rateLimits}</strong>
               </div>
               <div class="metric-card">
                 <span>{i18n.text('metrics.certificates')}</span>
@@ -855,6 +917,102 @@
                 </div>
               {/if}
             </div>
+          {:else if currentRoute === 'rate-limits'}
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('rateLimits.title')}</h2>
+                  <p>{i18n.text('rateLimits.description')}</p>
+                </div>
+                <button class="icon-button" type="button" title={i18n.text('services.refresh')} onclick={() => void loadRateLimits()}>
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </div>
+
+              <form class="rate-limit-form" onsubmit={(event) => { event.preventDefault(); void submitRateLimit(); }}>
+                {#if rateLimitsError}
+                  <div class="alert alert-danger mb-0" role="alert">{rateLimitsError}</div>
+                {/if}
+                <div>
+                  <label class="form-label" for="rate-limit-name">{i18n.text('rateLimits.name')}</label>
+                  <input id="rate-limit-name" class="form-control" bind:value={rateLimitName} required maxlength="120" />
+                </div>
+                <div>
+                  <label class="form-label" for="rate-limit-application">{i18n.text('rules.application')}</label>
+                  <select id="rate-limit-application" class="form-select" bind:value={rateLimitApplicationId}>
+                    <option value="">{i18n.text('rules.global')}</option>
+                    {#each dashboard.applications as application (application.id)}
+                      <option value={application.id}>{application.name}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="rate-limit-path">{i18n.text('rules.pathPrefix')}</label>
+                  <input id="rate-limit-path" class="form-control" bind:value={rateLimitPathPrefix} maxlength="256" />
+                </div>
+                <div>
+                  <label class="form-label" for="rate-limit-requests">{i18n.text('rateLimits.requests')}</label>
+                  <input id="rate-limit-requests" class="form-control" type="number" min="1" max="1000000" bind:value={rateLimitRequests} required />
+                </div>
+                <div>
+                  <label class="form-label" for="rate-limit-window">{i18n.text('rateLimits.window')}</label>
+                  <input id="rate-limit-window" class="form-control" type="number" min="10" max="86400" bind:value={rateLimitWindowSeconds} required />
+                </div>
+                <div>
+                  <label class="form-label" for="rate-limit-action">{i18n.text('rateLimits.action')}</label>
+                  <select id="rate-limit-action" class="form-select" bind:value={rateLimitAction}>
+                    <option value="block">{i18n.text('rateLimits.actionBlock')}</option>
+                    <option value="challenge">{i18n.text('rateLimits.actionChallenge')}</option>
+                    <option value="log">{i18n.text('rateLimits.actionLog')}</option>
+                  </select>
+                </div>
+                <div class="rate-limit-form-action">
+                  <button class="btn btn-primary" type="submit" disabled={rateLimitsSubmitting}>
+                    <i class="bi bi-plus-lg me-1"></i>
+                    {rateLimitsSubmitting ? i18n.text('rateLimits.saving') : i18n.text('rateLimits.new')}
+                  </button>
+                </div>
+              </form>
+
+              {#if rateLimitsLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('rateLimits.loading')}></div>
+                </div>
+              {:else if dashboard.rateLimits.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-stopwatch"></i>
+                  <h3>{i18n.text('rateLimits.emptyTitle')}</h3>
+                  <p>{i18n.text('rateLimits.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="table-responsive">
+                  <table class="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">{i18n.text('rateLimits.name')}</th>
+                        <th scope="col">{i18n.text('rules.application')}</th>
+                        <th scope="col">{i18n.text('rules.pathPrefix')}</th>
+                        <th scope="col">{i18n.text('rateLimits.requests')}</th>
+                        <th scope="col">{i18n.text('rateLimits.window')}</th>
+                        <th scope="col">{i18n.text('rateLimits.action')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dashboard.rateLimits as limit (limit.id)}
+                        <tr>
+                          <th scope="row">{limit.name}</th>
+                          <td>{limit.applicationName ?? i18n.text('rules.global')}</td>
+                          <td>{limit.pathPrefix ?? '*'}</td>
+                          <td>{limit.requests}</td>
+                          <td>{limit.windowSeconds}s</td>
+                          <td><span class="badge text-bg-info">{i18n.text(`rateLimits.action.${limit.action}`)}</span></td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            </div>
           {:else if currentRoute === 'dns'}
             <div class="workspace-panel">
               <div class="panel-heading">
@@ -1140,7 +1298,7 @@
 
   .metric-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
     gap: 1rem;
   }
 
@@ -1191,6 +1349,7 @@
 
   .application-form,
   .rule-form,
+  .rate-limit-form,
   .dns-form,
   .certificate-form {
     padding: 1rem;
@@ -1208,6 +1367,10 @@
     grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) 8rem 10rem minmax(8rem, 1fr) auto;
   }
 
+  .rate-limit-form {
+    grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) minmax(8rem, 1fr) 7rem 7rem 8rem auto;
+  }
+
   .dns-form {
     grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1fr) 7rem minmax(12rem, 1.4fr) 7rem 7rem auto;
   }
@@ -1218,6 +1381,7 @@
 
   .application-form .alert,
   .rule-form .alert,
+  .rate-limit-form .alert,
   .dns-form .alert,
   .certificate-form .alert {
     grid-column: 1 / -1;
@@ -1225,6 +1389,7 @@
 
   .application-form-action,
   .rule-form-action,
+  .rate-limit-form-action,
   .dns-form-action,
   .certificate-form-action {
     display: flex;
@@ -1305,6 +1470,7 @@
 
     .application-form,
     .rule-form,
+    .rate-limit-form,
     .dns-form,
     .certificate-form {
       grid-template-columns: 1fr;
@@ -1312,6 +1478,7 @@
 
     .application-form-action,
     .rule-form-action,
+    .rate-limit-form-action,
     .dns-form-action,
     .certificate-form-action {
       justify-content: flex-start;

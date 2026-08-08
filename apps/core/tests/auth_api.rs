@@ -708,6 +708,113 @@ async fn certificates_reject_invalid_input_without_mutating_state() {
     assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
 }
 
+#[tokio::test]
+async fn rate_limits_can_be_created_and_listed_without_sample_data() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+    let application = create_application(&app, &authenticated).await;
+    let application_id = application["id"].as_str().expect("application id must exist");
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/rate-limits")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert_eq!(response_json(empty).await["items"], serde_json::json!([]));
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/rate-limits")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(format!(
+                    r#"{{"name":"Login burst","applicationId":"{application_id}","pathPrefix":"/login","requests":20,"windowSeconds":60,"action":"block"}}"#
+                )))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = response_json(created).await;
+    assert_eq!(created_body["applicationId"], application_id);
+    assert_eq!(created_body["applicationName"], "Portal");
+    assert_eq!(created_body["name"], "Login burst");
+    assert_eq!(created_body["pathPrefix"], "/login");
+    assert_eq!(created_body["requests"], 20);
+    assert_eq!(created_body["windowSeconds"], 60);
+    assert_eq!(created_body["action"], "block");
+    assert_eq!(created_body["enabled"], true);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/rate-limits")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    let listed_body = response_json(listed).await;
+    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(listed_body["items"][0]["name"], "Login burst");
+}
+
+#[tokio::test]
+async fn rate_limits_reject_invalid_input_without_mutating_state() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/rate-limits")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"name":"","applicationId":"missing","pathPrefix":"relative","requests":0,"windowSeconds":1,"action":"allow"}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/rate-limits")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)

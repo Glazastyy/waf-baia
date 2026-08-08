@@ -3,8 +3,8 @@ import { adminNavigation, isLoginPath, resolveAdminRoute, shouldRedirectAuthenti
 
 describe('admin routes', () => {
   test('resolves every navigation item to a distinct admin route', () => {
-    expect(adminNavigation.map((item) => item.path)).toEqual(['/', '/applications', '/rules', '/dns', '/audit']);
-    expect(adminNavigation.map((item) => resolveAdminRoute(item.path))).toEqual(['overview', 'applications', 'rules', 'dns', 'audit']);
+    expect(adminNavigation.map((item) => item.path)).toEqual(['/', '/applications', '/rules', '/rate-limits', '/dns', '/audit']);
+    expect(adminNavigation.map((item) => resolveAdminRoute(item.path))).toEqual(['overview', 'applications', 'rules', 'rate-limits', 'dns', 'audit']);
   });
 
   test('falls back unknown paths to overview', () => {
