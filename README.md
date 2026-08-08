@@ -11,6 +11,15 @@ The current repository contains the first implementation milestone:
 - Docker Compose development stack with separated services.
 - Custom Caddy build with selected security modules.
 
+## Documentation
+
+- [Getting Started](docs/getting-started.md)
+- [Configuration](docs/configuration.md)
+- [Components](docs/components.md)
+- [Operations](docs/operations.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Architecture](docs/architecture.md)
+
 ## Quick Start
 
 Prepare local runtime files:
@@ -33,4 +42,4 @@ Start the stack:
 bun run compose:up
 ```
 
-Start with [docs/architecture.md](docs/architecture.md).
+For the complete operator flow, start with [Getting Started](docs/getting-started.md).
