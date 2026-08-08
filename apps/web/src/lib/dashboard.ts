@@ -51,3 +51,36 @@ export function dashboardSummary(dashboard: DashboardState): DashboardSummary {
     auditEvents: dashboard.auditEvents.length
   };
 }
+
+export function filterDashboard(dashboard: DashboardState, query: string): DashboardState {
+  const normalized = query.trim().toLowerCase();
+
+  if (!normalized) {
+    return dashboard;
+  }
+
+  return {
+    applications: dashboard.applications.filter((application) =>
+      matchesSearch(normalized, application.name, application.hostname, ...application.upstreams.map((upstream) => upstream.dial))
+    ),
+    rules: dashboard.rules.filter((rule) =>
+      matchesSearch(normalized, rule.name, rule.applicationName, rule.action, rule.pathPrefix, String(rule.priority))
+    ),
+    rateLimits: dashboard.rateLimits.filter((limit) =>
+      matchesSearch(normalized, limit.name, limit.applicationName, limit.pathPrefix, limit.action, String(limit.requests), String(limit.windowSeconds))
+    ),
+    certificates: dashboard.certificates.filter((certificate) =>
+      matchesSearch(normalized, certificate.domain, certificate.applicationName, certificate.issuer, certificate.challengeType, certificate.status)
+    ),
+    dnsRecords: dashboard.dnsRecords.filter((record) =>
+      matchesSearch(normalized, record.zoneName, record.name, record.recordType, record.content, String(record.ttl), record.proxied ? 'proxied' : 'dns only')
+    ),
+    auditEvents: dashboard.auditEvents.filter((event) =>
+      matchesSearch(normalized, event.actor, event.action, event.resourceType, event.resourceId, event.result, event.occurredAt)
+    )
+  };
+}
+
+function matchesSearch(query: string, ...values: Array<string | null | undefined>): boolean {
+  return values.some((value) => value?.toLowerCase().includes(query));
+}

@@ -14,13 +14,13 @@
     type ComponentConfigurationStatus,
     type ComponentStatus
   } from './lib/config';
-  import { createEmptyDashboard, dashboardSummary, type DashboardState } from './lib/dashboard';
+  import { createEmptyDashboard, dashboardSummary, filterDashboard, type DashboardState } from './lib/dashboard';
   import { createDnsClient, type DnsRecordType } from './lib/dns';
   import { localize, resolveLocale, supportedLocales, type Locale } from './lib/i18n';
   import { createRateLimitsClient, type RateLimitAction } from './lib/rate-limits';
   import { createWafRulesClient, type WafRuleAction } from './lib/waf-rules';
   import {
-    adminNavigation,
+    adminNavigationSections,
     pathForRoute,
     resolveAdminRoute,
     shouldRedirectAuthenticatedUser,
@@ -97,6 +97,8 @@
   let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
   let configurationLoading = $state(false);
   let configurationError = $state('');
+  let dashboardSearch = $state('');
+  let filteredDashboard = $derived(filterDashboard(dashboard, dashboardSearch));
   let summary = $derived(dashboardSummary(dashboard));
 
   onMount(() => {
@@ -555,16 +557,21 @@
           <span>Baia WAF</span>
         </a>
         <nav class="admin-nav" aria-label={i18n.text('nav.primary')}>
-          {#each adminNavigation as item (item.route)}
-            <a
-              class:active={currentRoute === item.route}
-              href={item.path}
-              aria-current={currentRoute === item.route ? 'page' : undefined}
-              onclick={(event) => { event.preventDefault(); navigate(item.route); }}
-            >
-              <i class={`bi ${item.icon}`}></i>
-              <span>{i18n.text(item.labelKey)}</span>
-            </a>
+          {#each adminNavigationSections as section (section.labelKey)}
+            <div class="admin-nav-section">
+              <div class="admin-nav-section-title">{i18n.text(section.labelKey)}</div>
+              {#each section.items as item (item.route)}
+                <a
+                  class:active={currentRoute === item.route}
+                  href={item.path}
+                  aria-current={currentRoute === item.route ? 'page' : undefined}
+                  onclick={(event) => { event.preventDefault(); navigate(item.route); }}
+                >
+                  <i class={`bi ${item.icon}`}></i>
+                  <span>{i18n.text(item.labelKey)}</span>
+                </a>
+              {/each}
+            </div>
           {/each}
         </nav>
       </aside>
@@ -576,6 +583,11 @@
             <h1>{i18n.text(`page.${currentRoute}.title`)}</h1>
           </div>
           <div class="admin-actions">
+            <div class="search-control">
+              <i class="bi bi-search"></i>
+              <label class="visually-hidden" for="dashboard-search">{i18n.text('nav.search')}</label>
+              <input id="dashboard-search" class="form-control form-control-sm" placeholder={i18n.text('nav.search')} bind:value={dashboardSearch} />
+            </div>
             <label class="visually-hidden" for="locale-select">{i18n.text('nav.language')}</label>
             <select id="locale-select" class="form-select form-select-sm language-select" value={locale} aria-label={i18n.text('nav.language')} onchange={(event) => changeLocale(event.currentTarget.value)}>
               {#each supportedLocales as supportedLocale (supportedLocale.code)}
@@ -633,100 +645,6 @@
                 <h3>{i18n.text('overview.emptyTitle')}</h3>
                 <p>{i18n.text('overview.emptyDescription')}</p>
               </div>
-            </div>
-
-            <div class="workspace-panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>{i18n.text('certificates.title')}</h2>
-                  <p>{i18n.text('certificates.description')}</p>
-                </div>
-                <button class="icon-button" type="button" title={i18n.text('services.refresh')} onclick={() => void loadCertificates()}>
-                  <i class="bi bi-arrow-clockwise"></i>
-                </button>
-              </div>
-
-              <form class="certificate-form" onsubmit={(event) => { event.preventDefault(); void submitCertificate(); }}>
-                {#if certificatesError}
-                  <div class="alert alert-danger mb-0" role="alert">{certificatesError}</div>
-                {/if}
-                <div>
-                  <label class="form-label" for="certificate-application">{i18n.text('rules.application')}</label>
-                  <select id="certificate-application" class="form-select" bind:value={certificateApplicationId}>
-                    <option value="">{i18n.text('rules.global')}</option>
-                    {#each dashboard.applications as application (application.id)}
-                      <option value={application.id}>{application.name}</option>
-                    {/each}
-                  </select>
-                </div>
-                <div>
-                  <label class="form-label" for="certificate-domain">{i18n.text('certificates.domain')}</label>
-                  <input id="certificate-domain" class="form-control" bind:value={certificateDomain} required maxlength="253" />
-                </div>
-                <div>
-                  <label class="form-label" for="certificate-issuer">{i18n.text('certificates.issuer')}</label>
-                  <input id="certificate-issuer" class="form-control" bind:value={certificateIssuer} required maxlength="120" />
-                </div>
-                <div>
-                  <label class="form-label" for="certificate-challenge">{i18n.text('certificates.challenge')}</label>
-                  <select id="certificate-challenge" class="form-select" bind:value={certificateChallengeType}>
-                    <option value="http_01">HTTP-01</option>
-                    <option value="dns_01">DNS-01</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="form-label" for="certificate-status">{i18n.text('certificates.status')}</label>
-                  <select id="certificate-status" class="form-select" bind:value={certificateStatus}>
-                    <option value="pending">{i18n.text('certificates.statusPending')}</option>
-                    <option value="issued">{i18n.text('certificates.statusIssued')}</option>
-                    <option value="failed">{i18n.text('certificates.statusFailed')}</option>
-                    <option value="revoked">{i18n.text('certificates.statusRevoked')}</option>
-                  </select>
-                </div>
-                <div class="certificate-form-action">
-                  <button class="btn btn-primary" type="submit" disabled={certificatesSubmitting}>
-                    <i class="bi bi-plus-lg me-1"></i>
-                    {certificatesSubmitting ? i18n.text('certificates.saving') : i18n.text('certificates.add')}
-                  </button>
-                </div>
-              </form>
-
-              {#if certificatesLoading}
-                <div class="empty-state">
-                  <div class="spinner-border" role="status" aria-label={i18n.text('certificates.loading')}></div>
-                </div>
-              {:else if dashboard.certificates.length === 0}
-                <div class="empty-state">
-                  <i class="bi bi-patch-check"></i>
-                  <h3>{i18n.text('certificates.emptyTitle')}</h3>
-                  <p>{i18n.text('certificates.emptyDescription')}</p>
-                </div>
-              {:else}
-                <div class="table-responsive">
-                  <table class="table align-middle mb-0">
-                    <thead>
-                      <tr>
-                        <th scope="col">{i18n.text('certificates.domain')}</th>
-                        <th scope="col">{i18n.text('rules.application')}</th>
-                        <th scope="col">{i18n.text('certificates.issuer')}</th>
-                        <th scope="col">{i18n.text('certificates.challenge')}</th>
-                        <th scope="col">{i18n.text('certificates.status')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each dashboard.certificates as certificate (certificate.id)}
-                        <tr>
-                          <th scope="row">{certificate.domain}</th>
-                          <td>{certificate.applicationName ?? i18n.text('rules.global')}</td>
-                          <td>{certificate.issuer}</td>
-                          <td>{certificate.challengeType}</td>
-                          <td>{certificate.status}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              {/if}
             </div>
 
             <div class="workspace-panel">
@@ -808,7 +726,7 @@
                 <div class="empty-state">
                   <div class="spinner-border" role="status" aria-label={i18n.text('applications.loading')}></div>
                 </div>
-              {:else if dashboard.applications.length === 0}
+              {:else if filteredDashboard.applications.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-window-stack"></i>
                   <h3>{i18n.text('applications.emptyTitle')}</h3>
@@ -826,7 +744,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each dashboard.applications as application (application.id)}
+                      {#each filteredDashboard.applications as application (application.id)}
                         <tr>
                           <th scope="row">{application.name}</th>
                           <td>{application.hostname}</td>
@@ -895,7 +813,7 @@
                 <div class="empty-state">
                   <div class="spinner-border" role="status" aria-label={i18n.text('rules.loading')}></div>
                 </div>
-              {:else if dashboard.rules.length === 0}
+              {:else if filteredDashboard.rules.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-shield-plus"></i>
                   <h3>{i18n.text('rules.emptyTitle')}</h3>
@@ -903,7 +821,7 @@
                 </div>
               {:else}
                 <div class="list-group list-group-flush">
-                  {#each dashboard.rules as rule (rule.id)}
+                  {#each filteredDashboard.rules as rule (rule.id)}
                     <div class="list-group-item">
                       <div class="d-flex justify-content-between gap-3">
                         <div>
@@ -978,7 +896,7 @@
                 <div class="empty-state">
                   <div class="spinner-border" role="status" aria-label={i18n.text('rateLimits.loading')}></div>
                 </div>
-              {:else if dashboard.rateLimits.length === 0}
+              {:else if filteredDashboard.rateLimits.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-stopwatch"></i>
                   <h3>{i18n.text('rateLimits.emptyTitle')}</h3>
@@ -998,7 +916,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each dashboard.rateLimits as limit (limit.id)}
+                      {#each filteredDashboard.rateLimits as limit (limit.id)}
                         <tr>
                           <th scope="row">{limit.name}</th>
                           <td>{limit.applicationName ?? i18n.text('rules.global')}</td>
@@ -1069,7 +987,7 @@
                 <div class="empty-state">
                   <div class="spinner-border" role="status" aria-label={i18n.text('dns.loading')}></div>
                 </div>
-              {:else if dashboard.dnsRecords.length === 0}
+              {:else if filteredDashboard.dnsRecords.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-diagram-3"></i>
                   <h3>{i18n.text('dns.emptyTitle')}</h3>
@@ -1089,7 +1007,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each dashboard.dnsRecords as record (record.id)}
+                      {#each filteredDashboard.dnsRecords as record (record.id)}
                         <tr>
                           <td>{record.recordType}</td>
                           <td>{record.zoneName}</td>
@@ -1097,6 +1015,100 @@
                           <td><code>{record.content}</code></td>
                           <td>{record.ttl}</td>
                           <td>{record.proxied ? i18n.text('dns.proxied') : i18n.text('dns.dnsOnly')}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            </div>
+          {:else if currentRoute === 'certificates'}
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('certificates.title')}</h2>
+                  <p>{i18n.text('certificates.description')}</p>
+                </div>
+                <button class="icon-button" type="button" title={i18n.text('services.refresh')} onclick={() => void loadCertificates()}>
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </div>
+
+              <form class="certificate-form" onsubmit={(event) => { event.preventDefault(); void submitCertificate(); }}>
+                {#if certificatesError}
+                  <div class="alert alert-danger mb-0" role="alert">{certificatesError}</div>
+                {/if}
+                <div>
+                  <label class="form-label" for="certificate-application">{i18n.text('rules.application')}</label>
+                  <select id="certificate-application" class="form-select" bind:value={certificateApplicationId}>
+                    <option value="">{i18n.text('rules.global')}</option>
+                    {#each dashboard.applications as application (application.id)}
+                      <option value={application.id}>{application.name}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-domain">{i18n.text('certificates.domain')}</label>
+                  <input id="certificate-domain" class="form-control" bind:value={certificateDomain} required maxlength="253" />
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-issuer">{i18n.text('certificates.issuer')}</label>
+                  <input id="certificate-issuer" class="form-control" bind:value={certificateIssuer} required maxlength="120" />
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-challenge">{i18n.text('certificates.challenge')}</label>
+                  <select id="certificate-challenge" class="form-select" bind:value={certificateChallengeType}>
+                    <option value="http_01">HTTP-01</option>
+                    <option value="dns_01">DNS-01</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-status">{i18n.text('certificates.status')}</label>
+                  <select id="certificate-status" class="form-select" bind:value={certificateStatus}>
+                    <option value="pending">{i18n.text('certificates.statusPending')}</option>
+                    <option value="issued">{i18n.text('certificates.statusIssued')}</option>
+                    <option value="failed">{i18n.text('certificates.statusFailed')}</option>
+                    <option value="revoked">{i18n.text('certificates.statusRevoked')}</option>
+                  </select>
+                </div>
+                <div class="certificate-form-action">
+                  <button class="btn btn-primary" type="submit" disabled={certificatesSubmitting}>
+                    <i class="bi bi-plus-lg me-1"></i>
+                    {certificatesSubmitting ? i18n.text('certificates.saving') : i18n.text('certificates.add')}
+                  </button>
+                </div>
+              </form>
+
+              {#if certificatesLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('certificates.loading')}></div>
+                </div>
+              {:else if filteredDashboard.certificates.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-patch-check"></i>
+                  <h3>{i18n.text('certificates.emptyTitle')}</h3>
+                  <p>{i18n.text('certificates.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="table-responsive">
+                  <table class="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">{i18n.text('certificates.domain')}</th>
+                        <th scope="col">{i18n.text('rules.application')}</th>
+                        <th scope="col">{i18n.text('certificates.issuer')}</th>
+                        <th scope="col">{i18n.text('certificates.challenge')}</th>
+                        <th scope="col">{i18n.text('certificates.status')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each filteredDashboard.certificates as certificate (certificate.id)}
+                        <tr>
+                          <th scope="row">{certificate.domain}</th>
+                          <td>{certificate.applicationName ?? i18n.text('rules.global')}</td>
+                          <td>{certificate.issuer}</td>
+                          <td>{certificate.challengeType}</td>
+                          <td>{certificate.status}</td>
                         </tr>
                       {/each}
                     </tbody>
@@ -1124,7 +1136,7 @@
                   <i class="bi bi-exclamation-triangle"></i>
                   <h3>{auditError}</h3>
                 </div>
-              {:else if dashboard.auditEvents.length === 0}
+              {:else if filteredDashboard.auditEvents.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-clock-history"></i>
                   <h3>{i18n.text('audit.emptyTitle')}</h3>
@@ -1143,7 +1155,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each dashboard.auditEvents as event (event.id)}
+                      {#each filteredDashboard.auditEvents as event (event.id)}
                         <tr>
                           <td>{event.occurredAt}</td>
                           <td>{event.actor}</td>
@@ -1194,15 +1206,16 @@
   .admin-shell {
     min-height: 100vh;
     display: grid;
-    grid-template-columns: 16rem minmax(0, 1fr);
-    background: #f5f7fb;
+    grid-template-columns: 17.5rem minmax(0, 1fr);
+    background: #050505;
+    color: #f5f7fb;
   }
 
   .admin-sidebar {
-    background: #111827;
-    color: #e5e7eb;
-    padding: 1.25rem;
-    border-right: 1px solid rgba(255, 255, 255, .08);
+    background: #070707;
+    color: #d1d5db;
+    padding: 1rem;
+    border-right: 1px solid #2a2a2a;
   }
 
   .admin-brand {
@@ -1212,28 +1225,41 @@
     color: #ffffff;
     text-decoration: none;
     font-weight: 700;
-    padding: .75rem .5rem 1.25rem;
+    padding: .75rem .5rem 1rem;
   }
 
   .admin-nav {
     display: grid;
+    gap: 1rem;
+  }
+
+  .admin-nav-section {
+    display: grid;
     gap: .25rem;
+  }
+
+  .admin-nav-section-title {
+    color: #8b949e;
+    font-size: .72rem;
+    font-weight: 700;
+    padding: .5rem .5rem .25rem;
+    text-transform: uppercase;
   }
 
   .admin-nav a {
     display: flex;
     align-items: center;
     gap: .75rem;
-    color: #aeb7c7;
+    color: #d0d7de;
     text-decoration: none;
-    border-radius: .5rem;
-    padding: .75rem;
+    border-radius: .375rem;
+    padding: .6rem .65rem;
     font-weight: 600;
   }
 
   .admin-nav a:hover,
   .admin-nav a.active {
-    background: #243044;
+    background: #1f1f1f;
     color: #ffffff;
   }
 
@@ -1250,8 +1276,8 @@
     gap: 1rem;
     min-height: 5.5rem;
     padding: 1.25rem 1.5rem;
-    background: #ffffff;
-    border-bottom: 1px solid #dfe4ec;
+    background: #050505;
+    border-bottom: 1px solid #2a2a2a;
   }
 
   .admin-topbar h1 {
@@ -1261,7 +1287,7 @@
   }
 
   .section-kicker {
-    color: #667085;
+    color: #8b949e;
     font-size: .78rem;
     font-weight: 700;
     text-transform: uppercase;
@@ -1275,6 +1301,23 @@
     flex-wrap: wrap;
   }
 
+  .search-control {
+    width: min(22rem, 100%);
+    position: relative;
+  }
+
+  .search-control i {
+    position: absolute;
+    left: .75rem;
+    top: 50%;
+    color: #8b949e;
+    transform: translateY(-50%);
+  }
+
+  .search-control .form-control {
+    padding-left: 2.1rem;
+  }
+
   .language-select {
     min-width: 8.5rem;
   }
@@ -1284,10 +1327,10 @@
     height: 2rem;
     display: inline-grid;
     place-items: center;
-    border: 1px solid #cfd6e3;
+    border: 1px solid #3a3a3a;
     border-radius: .375rem;
-    background: #ffffff;
-    color: #344054;
+    background: #111111;
+    color: #f5f7fb;
   }
 
   .content-shell {
@@ -1304,8 +1347,8 @@
 
   .metric-card,
   .workspace-panel {
-    background: #ffffff;
-    border: 1px solid #dfe4ec;
+    background: #101010;
+    border: 1px solid #2d2d2d;
     border-radius: .5rem;
   }
 
@@ -1316,13 +1359,13 @@
   }
 
   .metric-card span {
-    color: #667085;
+    color: #a1a1aa;
     font-size: .875rem;
     font-weight: 600;
   }
 
   .metric-card strong {
-    color: #101828;
+    color: #ffffff;
     font-size: 2rem;
     line-height: 1;
   }
@@ -1334,7 +1377,7 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 1rem;
-    border-bottom: 1px solid #e6ebf2;
+    border-bottom: 1px solid #2d2d2d;
   }
 
   .panel-heading h2 {
@@ -1343,7 +1386,7 @@
   }
 
   .panel-heading p {
-    color: #667085;
+    color: #a1a1aa;
     margin: .25rem 0 0;
   }
 
@@ -1356,7 +1399,7 @@
     display: grid;
     gap: 1rem;
     align-items: end;
-    border-bottom: 1px solid #e6ebf2;
+    border-bottom: 1px solid #2d2d2d;
   }
 
   .application-form {
@@ -1421,7 +1464,7 @@
 
   .empty-state h3 {
     margin: 0;
-    color: #101828;
+    color: #ffffff;
     font-size: 1.1rem;
   }
 

@@ -1,6 +1,6 @@
 import type { MessageKey } from './i18n';
 
-export type AdminRoute = 'overview' | 'applications' | 'rules' | 'rate-limits' | 'dns' | 'audit';
+export type AdminRoute = 'overview' | 'applications' | 'rules' | 'rate-limits' | 'dns' | 'certificates' | 'audit';
 
 export type AdminNavigationItem = {
   route: AdminRoute;
@@ -9,14 +9,42 @@ export type AdminNavigationItem = {
   icon: string;
 };
 
-export const adminNavigation: AdminNavigationItem[] = [
-  { route: 'overview', path: '/', labelKey: 'nav.overview', icon: 'bi-speedometer2' },
-  { route: 'applications', path: '/applications', labelKey: 'nav.applications', icon: 'bi-window-stack' },
-  { route: 'rules', path: '/rules', labelKey: 'nav.rules', icon: 'bi-shield-check' },
-  { route: 'rate-limits', path: '/rate-limits', labelKey: 'nav.rateLimits', icon: 'bi-stopwatch' },
-  { route: 'dns', path: '/dns', labelKey: 'nav.dns', icon: 'bi-diagram-3' },
-  { route: 'audit', path: '/audit', labelKey: 'nav.audit', icon: 'bi-clock-history' }
+export type AdminNavigationSection = {
+  labelKey: MessageKey;
+  items: AdminNavigationItem[];
+};
+
+export const adminNavigationSections: AdminNavigationSection[] = [
+  {
+    labelKey: 'nav.section.account',
+    items: [
+      { route: 'overview', path: '/', labelKey: 'nav.overview', icon: 'bi-speedometer2' },
+      { route: 'applications', path: '/applications', labelKey: 'nav.applications', icon: 'bi-window-stack' }
+    ]
+  },
+  {
+    labelKey: 'nav.section.security',
+    items: [
+      { route: 'rules', path: '/rules', labelKey: 'nav.rules', icon: 'bi-shield-check' },
+      { route: 'rate-limits', path: '/rate-limits', labelKey: 'nav.rateLimits', icon: 'bi-stopwatch' }
+    ]
+  },
+  {
+    labelKey: 'nav.section.network',
+    items: [
+      { route: 'dns', path: '/dns', labelKey: 'nav.dns', icon: 'bi-diagram-3' },
+      { route: 'certificates', path: '/certificates', labelKey: 'nav.certificates', icon: 'bi-patch-check' }
+    ]
+  },
+  {
+    labelKey: 'nav.section.operations',
+    items: [
+      { route: 'audit', path: '/audit', labelKey: 'nav.audit', icon: 'bi-clock-history' }
+    ]
+  }
 ];
+
+export const adminNavigation = adminNavigationSections.flatMap((section) => section.items);
 
 export function resolveAdminRoute(pathname: string): AdminRoute {
   return adminNavigation.find((item) => item.path === pathname)?.route ?? 'overview';
