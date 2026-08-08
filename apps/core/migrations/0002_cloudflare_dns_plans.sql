@@ -1,6 +1,6 @@
 CREATE TABLE cloudflare_dns_change_plans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    application_id UUID REFERENCES protected_applications(id) ON DELETE SET NULL,
+    application_id UUID REFERENCES applications(id) ON DELETE SET NULL,
     zone_id UUID REFERENCES dns_zones(id) ON DELETE SET NULL,
     hostname TEXT NOT NULL,
     cloudflare_zone_id TEXT NOT NULL,

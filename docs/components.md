@@ -60,7 +60,7 @@ The custom Caddy image includes:
 - `github.com/hslatman/caddy-crowdsec-bouncer/http`
 - `github.com/hslatman/caddy-crowdsec-bouncer/appsec`
 - `github.com/hslatman/caddy-crowdsec-bouncer/layer4`
-- `github.com/pberkel/caddy-storage-redis`
+- `github.com/pberkel/caddy-storage-redis@v1.8.1`
 
 Expected apply mode: hot reload through Caddy Admin API.
 

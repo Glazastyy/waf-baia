@@ -19,11 +19,13 @@ fn caddy_image_builds_with_required_waf_dns_and_storage_modules() {
         "github.com/hslatman/caddy-crowdsec-bouncer/http",
         "github.com/hslatman/caddy-crowdsec-bouncer/appsec",
         "github.com/hslatman/caddy-crowdsec-bouncer/layer4",
-        "github.com/pberkel/caddy-storage-redis",
+        "github.com/pberkel/caddy-storage-redis@v1.8.1",
     ] {
         assert!(
             dockerfile.contains(module),
             "Caddy image must include module {module}"
         );
     }
+
+    assert!(dockerfile.contains("ARG CADDY_VERSION=2.11.4"));
 }

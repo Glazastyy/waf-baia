@@ -6,6 +6,6 @@ RUN bun install --frozen-lockfile
 COPY apps/web ./apps/web
 RUN bun run --cwd apps/web build
 
-FROM caddy:2.10.2-alpine
+FROM caddy:2.11.4-alpine
 COPY --from=builder /workspace/apps/web/dist /usr/share/caddy
 EXPOSE 80

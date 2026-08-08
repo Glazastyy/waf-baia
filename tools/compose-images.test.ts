@@ -26,7 +26,7 @@ describe('compose image tags', () => {
   test('pins web runtime caddy to a patch version', () => {
     const dockerfile = readFileSync(webDockerfilePath, 'utf8');
 
-    expect(dockerfile).toContain('FROM caddy:2.10.2-alpine');
+    expect(dockerfile).toContain('FROM caddy:2.11.4-alpine');
     expect(dockerfile).not.toContain('FROM caddy:2.10-alpine');
   });
 });

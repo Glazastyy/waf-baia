@@ -47,7 +47,7 @@ Current verified runtime tags:
 - `crowdsecurity/crowdsec:v1.7.8`
 - `powerdns/pdns-auth-51:5.1.3`
 - `poweradmin/poweradmin:stable`
-- `caddy:2.10.2-alpine`
+- `caddy:2.11.4-alpine`
 
 Check tag regressions with:
 
