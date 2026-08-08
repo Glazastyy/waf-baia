@@ -126,6 +126,10 @@ pub fn component_catalog() -> Vec<ComponentDescriptor> {
                 "headers",
                 "rate_limit",
                 "crowdsec_bouncer",
+                "crowdsec_appsec",
+                "layer4",
+                "transform_encoder",
+                "redis_storage",
                 "dynamic_config",
             ],
             user_facing_configuration: vec![

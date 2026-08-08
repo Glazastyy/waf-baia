@@ -66,9 +66,17 @@ Infra: Docker Compose para desenvolvimento, PostgreSQL, Redis, Caddy, CrowdSec e
 
 `github.com/mholt/caddy-ratelimit`: rate limiting HTTP com sliding window, zonas dinâmicas e modo distribuído via storage compartilhado.
 
+`github.com/mholt/caddy-l4`: suporte Layer4 para bloqueio e proxy TCP/UDP quando a proteção precisar ir além de HTTP.
+
+`github.com/caddyserver/transform-encoder`: encoder estruturado adicional para logs compatíveis com integrações operacionais.
+
+`github.com/hslatman/caddy-crowdsec-bouncer/crowdsec`: app CrowdSec interno para consultar a Local API e manter cache de decisões.
+
 `github.com/hslatman/caddy-crowdsec-bouncer/http`: bloqueio HTTP por decisões do CrowdSec.
 
 `github.com/hslatman/caddy-crowdsec-bouncer/appsec`: integração AppSec do CrowdSec quando habilitada.
+
+`github.com/hslatman/caddy-crowdsec-bouncer/layer4`: matcher Layer4 para decisões CrowdSec em conexões TCP/UDP.
 
 `github.com/pberkel/caddy-storage-redis`: storage Redis para CertMagic/Caddy em cenários distribuídos.
 
