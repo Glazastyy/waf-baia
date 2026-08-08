@@ -1,0 +1,14 @@
+{
+  "name": "baia-waf",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "web:dev": "bun run --cwd apps/web dev",
+    "web:build": "bun run --cwd apps/web build",
+    "web:check": "bun run --cwd apps/web check",
+    "core:test": "cargo test"
+  }
+}

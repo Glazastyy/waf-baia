@@ -1,0 +1,24 @@
+{
+  "name": "@baia/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "bootstrap": "^5.3.8",
+    "bootstrap-icons": "^1.13.1",
+    "svelte": "^5.56.8",
+    "svelte-check": "^4.7.5",
+    "typescript": "~6",
+    "vite": "^8.2.1"
+  },
+  "devDependencies": {
+    "@typescript/native": "npm:typescript@7"
+  }
+}

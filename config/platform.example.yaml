@@ -1,0 +1,46 @@
+platform:
+  publicUrl: https://admin.waf.localhost
+  adminHostname: admin.waf.localhost
+modules:
+  acme:
+    enabled: true
+  crowdsec:
+    enabled: true
+  captcha:
+    enabled: false
+  redis:
+    enabled: true
+  email:
+    enabled: false
+  powerdns:
+    enabled: true
+  cloudflare:
+    enabled: false
+  metrics:
+    enabled: true
+  experimental:
+    enabled: false
+services:
+  postgres:
+    host: postgres
+    port: 5432
+  redis:
+    host: redis
+    port: 6379
+  caddyAdminUrl: http://caddy:2019
+integrations:
+  powerdns:
+    mode: integrated
+    apiUrl: http://powerdns:8081/api/v1
+    apiKeyEnv: BAIA_POWERDNS_API_KEY
+  cloudflare:
+    apiTokenEnv: BAIA_CLOUDFLARE_API_TOKEN
+  crowdsec:
+    localApiUrl: http://crowdsec:8080
+    apiKeyEnv: BAIA_CROWDSEC_API_KEY
+tls:
+  acme:
+    emailEnv: BAIA_ACME_EMAIL
+    http01Enabled: true
+    dnsProvider: powerdns
+    wildcardEnabled: false

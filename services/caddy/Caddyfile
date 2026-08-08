@@ -1,0 +1,12 @@
+{
+	admin 0.0.0.0:2019
+	email {$BAIA_ACME_EMAIL}
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	respond /health "ok" 200
+	reverse_proxy web:80
+}

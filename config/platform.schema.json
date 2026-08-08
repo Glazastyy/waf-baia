@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Baia WAF Platform Configuration",
+  "type": "object",
+  "required": ["platform", "modules", "services", "integrations", "tls"],
+  "additionalProperties": false,
+  "properties": {
+    "platform": {
+      "type": "object",
+      "required": ["publicUrl", "adminHostname"],
+      "additionalProperties": false,
+      "properties": {
+        "publicUrl": { "type": "string", "format": "uri" },
+        "adminHostname": { "type": "string", "minLength": 1 }
+      }
+    },
+    "modules": {
+      "type": "object",
+      "required": ["acme", "crowdsec", "captcha", "redis", "email", "powerdns", "cloudflare", "metrics", "experimental"],
+      "additionalProperties": false,
+      "properties": {
+        "acme": { "$ref": "#/$defs/moduleToggle" },
+        "crowdsec": { "$ref": "#/$defs/moduleToggle" },
+        "captcha": { "$ref": "#/$defs/moduleToggle" },
+        "redis": { "$ref": "#/$defs/moduleToggle" },
+        "email": { "$ref": "#/$defs/moduleToggle" },
+        "powerdns": { "$ref": "#/$defs/moduleToggle" },
+        "cloudflare": { "$ref": "#/$defs/moduleToggle" },
+        "metrics": { "$ref": "#/$defs/moduleToggle" },
+        "experimental": { "$ref": "#/$defs/moduleToggle" }
+      }
+    },
+    "services": {
+      "type": "object",
+      "required": ["postgres", "redis", "caddyAdminUrl"],
+      "additionalProperties": false,
+      "properties": {
+        "postgres": { "$ref": "#/$defs/networkService" },
+        "redis": { "$ref": "#/$defs/networkService" },
+        "caddyAdminUrl": { "type": "string", "format": "uri" }
+      }
+    },
+    "integrations": {
+      "type": "object",
+      "required": ["powerdns", "cloudflare", "crowdsec"],
+      "additionalProperties": false,
+      "properties": {
+        "powerdns": {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["integrated", "external"] },
+            "apiUrl": { "type": "string", "format": "uri" },
+            "apiKeyEnv": { "type": "string", "minLength": 1 }
+          }
+        },
+        "cloudflare": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiTokenEnv": { "type": "string", "minLength": 1 },
+            "accountId": { "type": "string", "minLength": 1 }
+          }
+        },
+        "crowdsec": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "localApiUrl": { "type": "string", "format": "uri" },
+            "apiKeyEnv": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "required": ["acme"],
+      "additionalProperties": false,
+      "properties": {
+        "acme": {
+          "type": "object",
+          "required": ["emailEnv", "http01Enabled", "wildcardEnabled"],
+          "additionalProperties": false,
+          "properties": {
+            "emailEnv": { "type": "string", "minLength": 1 },
+            "http01Enabled": { "type": "boolean" },
+            "dnsProvider": { "enum": ["powerdns", "cloudflare"] },
+            "wildcardEnabled": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "moduleToggle": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "networkService": {
+      "type": "object",
+      "required": ["host", "port"],
+      "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  }
+}

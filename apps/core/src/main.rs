@@ -1,0 +1,18 @@
+use baia_core::auth::{BootstrapState, bootstrap_initial_admin};
+use baia_core::config::PlatformConfig;
+
+fn main() {
+    let config = PlatformConfig::default();
+    config
+        .validate()
+        .expect("platform configuration must be valid");
+
+    if let Some(admin) = bootstrap_initial_admin(BootstrapState::AdminExists) {
+        let password = admin.temporary_password.expose_for_initial_log_once();
+        println!("Admin user: {}", admin.username);
+        println!("Temporary password: {password}");
+        println!("Login URL: {}/login", config.platform.public_url);
+    }
+
+    println!("Baia Core control plane initialized");
+}
