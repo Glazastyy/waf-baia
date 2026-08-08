@@ -24,6 +24,7 @@ async function createProjectFixture(): Promise<string> {
       'REDIS_PASSWORD=change-this-redis-password',
       'BAIA_POWERDNS_API_KEY=change-this-powerdns-api-key',
       'BAIA_CROWDSEC_API_KEY=change-this-crowdsec-api-key',
+      'BAIA_INITIAL_ADMIN_PASSWORD=change-this-initial-admin-password',
       'BAIA_CLOUDFLARE_API_TOKEN=',
       'BAIA_ACME_EMAIL=admin@example.test'
     ].join('\n')
@@ -59,6 +60,7 @@ describe('setup', () => {
     expect(secrets).not.toContain('change-this-redis-password');
     expect(secrets).not.toContain('change-this-powerdns-api-key');
     expect(secrets).not.toContain('change-this-crowdsec-api-key');
+    expect(secrets).not.toContain('change-this-initial-admin-password');
     expect(platform).toContain('publicUrl: https://admin.waf.localhost');
   });
 

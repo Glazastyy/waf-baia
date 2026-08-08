@@ -16,6 +16,8 @@ Start:
 bun run compose:up
 ```
 
+The start command uses detached Compose mode and prints the access summary only after Docker has finished. No container logs are streamed after the admin URL and credentials.
+
 Stop:
 
 ```sh
@@ -61,6 +63,7 @@ Examples:
 - `REDIS_PASSWORD`: Redis and Core connection string
 - `BAIA_POWERDNS_API_KEY`: PowerDNS and Core
 - `BAIA_CROWDSEC_API_KEY`: CrowdSec and Core
+- `BAIA_INITIAL_ADMIN_PASSWORD`: first admin login
 - `BAIA_CLOUDFLARE_API_TOKEN`: Core and Caddy when Cloudflare DNS-01 is used
 
 Do not place secret values in `config/platform.yaml`.

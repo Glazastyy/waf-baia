@@ -42,6 +42,8 @@ Start the stack:
 bun run compose:up
 ```
 
+This starts Compose in detached mode. After Docker finishes building and starting services, the command prints the admin URL, admin user and initial password as the final output lines.
+
 Stop the stack:
 
 ```sh
@@ -62,6 +64,7 @@ Open `config/platform.yaml` and review:
 Open `config/secrets.env` and review:
 
 - `BAIA_ACME_EMAIL`
+- `BAIA_INITIAL_ADMIN_PASSWORD`
 - `BAIA_CLOUDFLARE_API_TOKEN`, when Cloudflare is enabled
 - generated local passwords and API keys
 

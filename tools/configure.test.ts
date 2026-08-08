@@ -58,6 +58,7 @@ describe('configure wizard', () => {
     expect(readEnvValue(secrets, 'REDIS_PASSWORD')).toHaveLength(43);
     expect(readEnvValue(secrets, 'BAIA_POWERDNS_API_KEY')).toHaveLength(43);
     expect(readEnvValue(secrets, 'BAIA_CROWDSEC_API_KEY')).toHaveLength(43);
+    expect(readEnvValue(secrets, 'BAIA_INITIAL_ADMIN_PASSWORD')).toHaveLength(43);
   });
 
   test('does not overwrite existing files without confirmation', async () => {

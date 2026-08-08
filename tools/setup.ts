@@ -16,7 +16,8 @@ const generatedSecretKeys = new Set([
   'POSTGRES_PASSWORD',
   'REDIS_PASSWORD',
   'BAIA_POWERDNS_API_KEY',
-  'BAIA_CROWDSEC_API_KEY'
+  'BAIA_CROWDSEC_API_KEY',
+  'BAIA_INITIAL_ADMIN_PASSWORD'
 ]);
 
 export async function runSetup(options: SetupOptions = {}): Promise<SetupResult> {

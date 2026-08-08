@@ -253,6 +253,7 @@ function renderSecretsEnv(answers: ConfigureAnswers): string {
     `REDIS_PASSWORD=${randomSecret()}`,
     `BAIA_POWERDNS_API_KEY=${randomSecret()}`,
     `BAIA_CROWDSEC_API_KEY=${randomSecret()}`,
+    `BAIA_INITIAL_ADMIN_PASSWORD=${randomSecret()}`,
     `BAIA_CLOUDFLARE_API_TOKEN=${answers.cloudflareToken}`,
     `BAIA_ACME_EMAIL=${answers.acmeEmail}`,
     ''
