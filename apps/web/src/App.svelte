@@ -10,6 +10,7 @@
   } from './lib/config';
   import { createEmptyDashboard, dashboardSummary, type DashboardState } from './lib/dashboard';
   import { localize, resolveLocale, supportedLocales, type Locale } from './lib/i18n';
+  import { createWafRulesClient, type WafRuleAction } from './lib/waf-rules';
   import {
     adminNavigation,
     pathForRoute,
@@ -24,6 +25,7 @@
   const auth = createAuthClient();
   const configClient = createConfigClient();
   const applicationsClient = createApplicationsClient();
+  const wafRulesClient = createWafRulesClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -42,6 +44,14 @@
   let applicationsLoading = $state(false);
   let applicationsSubmitting = $state(false);
   let applicationsError = $state('');
+  let wafRuleName = $state('');
+  let wafRuleApplicationId = $state('');
+  let wafRulePriority = $state(100);
+  let wafRuleAction = $state<WafRuleAction>('block');
+  let wafRulePathPrefix = $state('');
+  let wafRulesLoading = $state(false);
+  let wafRulesSubmitting = $state(false);
+  let wafRulesError = $state('');
   let currentRoute = $state<AdminRoute>(resolveAdminRoute(window.location.pathname));
   let dashboard = $state<DashboardState>(createEmptyDashboard());
   let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
@@ -152,6 +162,19 @@
     }
   }
 
+  async function loadWafRules(): Promise<void> {
+    wafRulesLoading = true;
+    wafRulesError = '';
+    try {
+      dashboard.rules = await wafRulesClient.list();
+    } catch {
+      dashboard.rules = [];
+      wafRulesError = i18n.text('rules.loadError');
+    } finally {
+      wafRulesLoading = false;
+    }
+  }
+
   async function submitApplication(): Promise<void> {
     const csrfToken = authSession.csrfToken;
 
@@ -179,13 +202,44 @@
     }
   }
 
+  async function submitWafRule(): Promise<void> {
+    const csrfToken = authSession.csrfToken;
+
+    if (!csrfToken) {
+      wafRulesError = i18n.text('rules.authRequired');
+      return;
+    }
+
+    wafRulesSubmitting = true;
+    wafRulesError = '';
+    try {
+      const rule = await wafRulesClient.create(csrfToken, {
+        name: wafRuleName,
+        applicationId: wafRuleApplicationId || null,
+        priority: wafRulePriority,
+        action: wafRuleAction,
+        pathPrefix: wafRulePathPrefix || null
+      });
+      dashboard.rules = [...dashboard.rules, rule];
+      wafRuleName = '';
+      wafRuleApplicationId = '';
+      wafRulePriority = 100;
+      wafRuleAction = 'block';
+      wafRulePathPrefix = '';
+    } catch {
+      wafRulesError = i18n.text('rules.saveError');
+    } finally {
+      wafRulesSubmitting = false;
+    }
+  }
+
   async function refreshSession(): Promise<void> {
     authLoading = true;
     try {
       authSession = await auth.session();
       if (authSession.authenticated) {
         syncAuthenticatedPath();
-        await Promise.all([loadConfiguration(), loadApplications()]);
+        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules()]);
       } else if (window.location.pathname !== '/login') {
         replacePath('/login');
       }
@@ -204,7 +258,7 @@
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules()]);
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -226,7 +280,7 @@
       newPassword = '';
       authSession = await auth.session();
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules()]);
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -500,12 +554,56 @@
                   <h2>{i18n.text('rules.title')}</h2>
                   <p>{i18n.text('rules.description')}</p>
                 </div>
-                <button class="btn btn-primary btn-sm" type="button">
-                  <i class="bi bi-plus-lg me-1"></i>
-                  {i18n.text('rules.new')}
-                </button>
               </div>
-              {#if dashboard.rules.length === 0}
+
+              <form class="rule-form" onsubmit={(event) => { event.preventDefault(); void submitWafRule(); }}>
+                {#if wafRulesError}
+                  <div class="alert alert-danger mb-0" role="alert">{wafRulesError}</div>
+                {/if}
+                <div>
+                  <label class="form-label" for="waf-rule-name">{i18n.text('rules.name')}</label>
+                  <input id="waf-rule-name" class="form-control" bind:value={wafRuleName} required maxlength="120" />
+                </div>
+                <div>
+                  <label class="form-label" for="waf-rule-application">{i18n.text('rules.application')}</label>
+                  <select id="waf-rule-application" class="form-select" bind:value={wafRuleApplicationId}>
+                    <option value="">{i18n.text('rules.global')}</option>
+                    {#each dashboard.applications as application (application.id)}
+                      <option value={application.id}>{application.name}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="waf-rule-priority">{i18n.text('rules.priority')}</label>
+                  <input id="waf-rule-priority" class="form-control" type="number" min="0" max="100000" bind:value={wafRulePriority} required />
+                </div>
+                <div>
+                  <label class="form-label" for="waf-rule-action">{i18n.text('rules.action')}</label>
+                  <select id="waf-rule-action" class="form-select" bind:value={wafRuleAction}>
+                    <option value="allow">{i18n.text('rules.actionAllow')}</option>
+                    <option value="block">{i18n.text('rules.actionBlock')}</option>
+                    <option value="challenge">{i18n.text('rules.actionChallenge')}</option>
+                    <option value="rate_limit">{i18n.text('rules.actionRateLimit')}</option>
+                    <option value="log">{i18n.text('rules.actionLog')}</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="waf-rule-path">{i18n.text('rules.pathPrefix')}</label>
+                  <input id="waf-rule-path" class="form-control" bind:value={wafRulePathPrefix} maxlength="256" />
+                </div>
+                <div class="rule-form-action">
+                  <button class="btn btn-primary" type="submit" disabled={wafRulesSubmitting}>
+                    <i class="bi bi-plus-lg me-1"></i>
+                    {wafRulesSubmitting ? i18n.text('rules.saving') : i18n.text('rules.new')}
+                  </button>
+                </div>
+              </form>
+
+              {#if wafRulesLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('rules.loading')}></div>
+                </div>
+              {:else if dashboard.rules.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-shield-plus"></i>
                   <h3>{i18n.text('rules.emptyTitle')}</h3>
@@ -517,10 +615,10 @@
                     <div class="list-group-item">
                       <div class="d-flex justify-content-between gap-3">
                         <div>
-                          <div class="fw-semibold">{rule.name}</div>
-                          <div class="text-body-secondary small">{rule.applicationName ?? i18n.text('rules.global')}</div>
+                          <div class="fw-semibold">{rule.priority}. {rule.name}</div>
+                          <div class="text-body-secondary small">{rule.applicationName ?? i18n.text('rules.global')}{rule.pathPrefix ? ` · ${rule.pathPrefix}` : ''}</div>
                         </div>
-                        <span class="badge text-bg-info align-self-start">{rule.action}</span>
+                        <span class="badge text-bg-info align-self-start">{i18n.text(`rules.action.${rule.action}`)}</span>
                       </div>
                     </div>
                   {/each}
@@ -799,20 +897,30 @@
     margin: .25rem 0 0;
   }
 
-  .application-form {
+  .application-form,
+  .rule-form {
     padding: 1rem;
     display: grid;
-    grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.2fr) minmax(12rem, 1.2fr) auto;
     gap: 1rem;
     align-items: end;
     border-bottom: 1px solid #e6ebf2;
   }
 
-  .application-form .alert {
+  .application-form {
+    grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.2fr) minmax(12rem, 1.2fr) auto;
+  }
+
+  .rule-form {
+    grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) 8rem 10rem minmax(8rem, 1fr) auto;
+  }
+
+  .application-form .alert,
+  .rule-form .alert {
     grid-column: 1 / -1;
   }
 
-  .application-form-action {
+  .application-form-action,
+  .rule-form-action {
     display: flex;
     justify-content: flex-end;
   }
@@ -882,11 +990,13 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .application-form {
+    .application-form,
+    .rule-form {
       grid-template-columns: 1fr;
     }
 
-    .application-form-action {
+    .application-form-action,
+    .rule-form-action {
       justify-content: flex-start;
     }
   }

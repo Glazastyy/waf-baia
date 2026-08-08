@@ -311,6 +311,129 @@ async fn applications_reject_invalid_input_without_mutating_state() {
     assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
 }
 
+#[tokio::test]
+async fn waf_rules_can_be_created_for_existing_applications_and_listed() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+    let application = create_application(&app, &authenticated).await;
+    let application_id = application["id"].as_str().expect("application id must exist");
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/waf/rules")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert_eq!(response_json(empty).await["items"], serde_json::json!([]));
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/waf/rules")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(format!(
+                    r#"{{"name":"Block admin paths","applicationId":"{application_id}","priority":10,"action":"block","pathPrefix":"/admin"}}"#
+                )))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = response_json(created).await;
+    assert_eq!(created_body["name"], "Block admin paths");
+    assert_eq!(created_body["applicationId"], application_id);
+    assert_eq!(created_body["applicationName"], "Portal");
+    assert_eq!(created_body["action"], "block");
+    assert_eq!(created_body["enabled"], true);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/waf/rules")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    let listed_body = response_json(listed).await;
+    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(listed_body["items"][0]["applicationName"], "Portal");
+}
+
+#[tokio::test]
+async fn waf_rules_reject_invalid_action_and_missing_application() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let invalid_action = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/waf/rules")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"name":"Invalid","priority":10,"action":"execute","pathPrefix":"/"}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(invalid_action.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let missing_application = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/waf/rules")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"name":"Missing app","applicationId":"missing","priority":10,"action":"block","pathPrefix":"/"}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(missing_application.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/waf/rules")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -369,4 +492,26 @@ async fn login_session(app: &axum::Router) -> AuthenticatedSession {
         session_cookie,
         csrf_token,
     }
+}
+
+async fn create_application(app: &axum::Router, authenticated: &AuthenticatedSession) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/applications")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"name":"Portal","hostname":"portal.example.com","upstreams":[{"dial":"10.0.0.20:8080"}]}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    response_json(response).await
 }

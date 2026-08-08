@@ -1,14 +1,8 @@
 import type { Application } from './applications';
+import type { WafRule } from './waf-rules';
 
 export type { Application } from './applications';
-
-export type WafRule = {
-  id: string;
-  name: string;
-  applicationName: string | null;
-  action: string;
-  enabled: boolean;
-};
+export type { WafRule } from './waf-rules';
 
 export type Certificate = {
   id: string;

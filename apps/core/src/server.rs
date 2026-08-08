@@ -34,6 +34,7 @@ struct AppState {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     throttles: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     applications: Arc<Mutex<Vec<ApplicationRecord>>>,
+    waf_rules: Arc<Mutex<Vec<WafRuleRecord>>>,
     secure_cookies: bool,
     platform_config: PlatformConfig,
 }
@@ -76,6 +77,27 @@ struct UpstreamRecord {
     enabled: bool,
 }
 
+#[derive(Clone)]
+struct WafRuleRecord {
+    id: String,
+    name: String,
+    application_id: Option<String>,
+    application_name: Option<String>,
+    priority: u32,
+    action: WafRuleAction,
+    path_prefix: Option<String>,
+    enabled: bool,
+}
+
+#[derive(Clone)]
+enum WafRuleAction {
+    Allow,
+    Block,
+    Challenge,
+    RateLimit,
+    Log,
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginRequest {
     username: String,
@@ -102,6 +124,16 @@ struct CreateApplicationRequest {
 struct CreateUpstreamRequest {
     dial: String,
     weight: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWafRuleRequest {
+    name: String,
+    application_id: Option<String>,
+    priority: u32,
+    action: String,
+    path_prefix: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -192,6 +224,25 @@ struct UpstreamResponse {
     enabled: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WafRuleListResponse {
+    items: Vec<WafRuleResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WafRuleResponse {
+    id: String,
+    name: String,
+    application_id: Option<String>,
+    application_name: Option<String>,
+    priority: u32,
+    action: &'static str,
+    path_prefix: Option<String>,
+    enabled: bool,
+}
+
 impl ServerConfig {
     pub fn from_env() -> Self {
         let bind_addr = std::env::var("BAIA_CORE_BIND")
@@ -240,6 +291,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         sessions: Arc::new(Mutex::new(HashMap::new())),
         throttles: Arc::new(Mutex::new(HashMap::new())),
         applications: Arc::new(Mutex::new(Vec::new())),
+        waf_rules: Arc::new(Mutex::new(Vec::new())),
         secure_cookies: config.secure_cookies,
         platform_config: config.platform_config,
     };
@@ -267,7 +319,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         )
         .route(
             "/api/waf/rules",
-            get(authenticated_json).post(authenticated_no_content),
+            get(waf_rules_index).post(waf_rules_create),
         )
         .route(
             "/api/rate-limits",
@@ -508,6 +560,54 @@ async fn applications_create(
     (StatusCode::CREATED, Json(application_response(application))).into_response()
 }
 
+async fn waf_rules_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let rules = state
+        .waf_rules
+        .lock()
+        .expect("waf rules lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(waf_rule_response)
+        .collect();
+
+    Json(WafRuleListResponse { items: rules }).into_response()
+}
+
+async fn waf_rules_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateWafRuleRequest>,
+) -> Response {
+    let Some(session) = require_session(&state, &headers) else {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+
+    if !valid_csrf(&headers, &session) {
+        return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
+    }
+
+    let applications = state
+        .applications
+        .lock()
+        .expect("applications lock must not be poisoned");
+    let Ok(rule) = waf_rule_from_request(request, &applications) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "WAF rule input is invalid");
+    };
+    drop(applications);
+
+    state
+        .waf_rules
+        .lock()
+        .expect("waf rules lock must not be poisoned")
+        .push(rule.clone());
+
+    (StatusCode::CREATED, Json(waf_rule_response(rule))).into_response()
+}
+
 async fn authenticated_no_content(State(state): State<AppState>, headers: HeaderMap) -> Response {
     authenticated_mutation(state, headers)
 }
@@ -625,6 +725,97 @@ fn application_response(application: ApplicationRecord) -> ApplicationResponse {
     }
 }
 
+fn waf_rule_from_request(
+    request: CreateWafRuleRequest,
+    applications: &[ApplicationRecord],
+) -> Result<WafRuleRecord, WafRuleValidationError> {
+    let name = normalized_name(&request.name).ok_or(WafRuleValidationError)?;
+    let action = waf_rule_action(&request.action).ok_or(WafRuleValidationError)?;
+    let path_prefix = match request.path_prefix.as_deref() {
+        Some(value) => normalized_path_prefix(value)?,
+        None => None,
+    };
+    let (application_id, application_name) =
+        resolve_rule_application(request.application_id, applications)?;
+
+    if request.priority > 100_000 {
+        return Err(WafRuleValidationError);
+    }
+
+    Ok(WafRuleRecord {
+        id: random_token(24),
+        name,
+        application_id,
+        application_name,
+        priority: request.priority,
+        action,
+        path_prefix,
+        enabled: true,
+    })
+}
+
+fn resolve_rule_application(
+    application_id: Option<String>,
+    applications: &[ApplicationRecord],
+) -> Result<(Option<String>, Option<String>), WafRuleValidationError> {
+    let Some(application_id) = application_id else {
+        return Ok((None, None));
+    };
+
+    let normalized = application_id.trim();
+
+    if normalized.is_empty() {
+        return Err(WafRuleValidationError);
+    }
+
+    applications
+        .iter()
+        .find(|application| application.id == normalized)
+        .map(|application| {
+            (
+                Some(application.id.clone()),
+                Some(application.name.clone()),
+            )
+        })
+        .ok_or(WafRuleValidationError)
+}
+
+fn waf_rule_response(rule: WafRuleRecord) -> WafRuleResponse {
+    WafRuleResponse {
+        id: rule.id,
+        name: rule.name,
+        application_id: rule.application_id,
+        application_name: rule.application_name,
+        priority: rule.priority,
+        action: rule.action.as_str(),
+        path_prefix: rule.path_prefix,
+        enabled: rule.enabled,
+    }
+}
+
+fn waf_rule_action(value: &str) -> Option<WafRuleAction> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "allow" => Some(WafRuleAction::Allow),
+        "block" => Some(WafRuleAction::Block),
+        "challenge" => Some(WafRuleAction::Challenge),
+        "rate_limit" | "rate-limit" => Some(WafRuleAction::RateLimit),
+        "log" => Some(WafRuleAction::Log),
+        _ => None,
+    }
+}
+
+impl WafRuleAction {
+    fn as_str(&self) -> &'static str {
+        match self {
+            WafRuleAction::Allow => "allow",
+            WafRuleAction::Block => "block",
+            WafRuleAction::Challenge => "challenge",
+            WafRuleAction::RateLimit => "rate_limit",
+            WafRuleAction::Log => "log",
+        }
+    }
+}
+
 fn normalized_name(value: &str) -> Option<String> {
     let normalized = value.trim();
 
@@ -663,8 +854,29 @@ fn normalized_dial(value: &str) -> Option<String> {
     Some(dial.to_string())
 }
 
+fn normalized_path_prefix(value: &str) -> Result<Option<String>, WafRuleValidationError> {
+    let path = value.trim();
+
+    if path.is_empty() {
+        return Ok(None);
+    }
+
+    if !path.starts_with('/')
+        || path.len() > 256
+        || path.bytes().any(|byte| byte.is_ascii_control())
+        || path.contains("..")
+    {
+        return Err(WafRuleValidationError);
+    }
+
+    Ok(Some(path.to_string()))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ApplicationValidationError;
+
+#[derive(Debug, Clone, Copy)]
+struct WafRuleValidationError;
 
 fn require_session(state: &AppState, headers: &HeaderMap) -> Option<Session> {
     let session_id = session_cookie_value(headers)?;
