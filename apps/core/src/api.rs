@@ -45,6 +45,7 @@ pub fn admin_api_routes() -> Vec<ApiRoute> {
         ApiRoute::new(Method::Post, "/api/cloudflare/dns/apply"),
         ApiRoute::new(Method::Get, "/api/cloudflare/acme-cas"),
         ApiRoute::new(Method::Get, "/api/certificates"),
+        ApiRoute::new(Method::Post, "/api/certificates"),
         ApiRoute::new(Method::Get, "/api/crowdsec/decisions"),
         ApiRoute::new(Method::Get, "/api/audit/events"),
         ApiRoute::new(Method::Get, "/api/metrics"),

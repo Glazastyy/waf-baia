@@ -4,6 +4,11 @@
   import { createAuditClient } from './lib/audit';
   import { createAuthClient, type AuthSession } from './lib/auth';
   import {
+    createCertificatesClient,
+    type CertificateChallengeType,
+    type CertificateStatus
+  } from './lib/certificates';
+  import {
     componentStatusesFromConfiguration,
     createConfigClient,
     type ComponentConfigurationStatus,
@@ -30,6 +35,7 @@
   const wafRulesClient = createWafRulesClient();
   const dnsClient = createDnsClient();
   const auditClient = createAuditClient();
+  const certificatesClient = createCertificatesClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -67,6 +73,14 @@
   let dnsError = $state('');
   let auditLoading = $state(false);
   let auditError = $state('');
+  let certificateApplicationId = $state('');
+  let certificateDomain = $state('');
+  let certificateIssuer = $state('letsencrypt');
+  let certificateChallengeType = $state<CertificateChallengeType>('http_01');
+  let certificateStatus = $state<CertificateStatus>('pending');
+  let certificatesLoading = $state(false);
+  let certificatesSubmitting = $state(false);
+  let certificatesError = $state('');
   let currentRoute = $state<AdminRoute>(resolveAdminRoute(window.location.pathname));
   let dashboard = $state<DashboardState>(createEmptyDashboard());
   let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
@@ -216,6 +230,19 @@
     }
   }
 
+  async function loadCertificates(): Promise<void> {
+    certificatesLoading = true;
+    certificatesError = '';
+    try {
+      dashboard.certificates = await certificatesClient.list();
+    } catch {
+      dashboard.certificates = [];
+      certificatesError = i18n.text('certificates.loadError');
+    } finally {
+      certificatesLoading = false;
+    }
+  }
+
   async function submitApplication(): Promise<void> {
     const csrfToken = authSession.csrfToken;
 
@@ -310,13 +337,45 @@
     }
   }
 
+  async function submitCertificate(): Promise<void> {
+    const csrfToken = authSession.csrfToken;
+
+    if (!csrfToken) {
+      certificatesError = i18n.text('certificates.authRequired');
+      return;
+    }
+
+    certificatesSubmitting = true;
+    certificatesError = '';
+    try {
+      const certificate = await certificatesClient.create(csrfToken, {
+        applicationId: certificateApplicationId || null,
+        domain: certificateDomain,
+        issuer: certificateIssuer,
+        challengeType: certificateChallengeType,
+        status: certificateStatus
+      });
+      dashboard.certificates = [...dashboard.certificates, certificate];
+      certificateApplicationId = '';
+      certificateDomain = '';
+      certificateIssuer = 'letsencrypt';
+      certificateChallengeType = 'http_01';
+      certificateStatus = 'pending';
+      await loadAuditEvents();
+    } catch {
+      certificatesError = i18n.text('certificates.saveError');
+    } finally {
+      certificatesSubmitting = false;
+    }
+  }
+
   async function refreshSession(): Promise<void> {
     authLoading = true;
     try {
       authSession = await auth.session();
       if (authSession.authenticated) {
         syncAuthenticatedPath();
-        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadAuditEvents()]);
+        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
       } else if (window.location.pathname !== '/login') {
         replacePath('/login');
       }
@@ -335,7 +394,7 @@
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadAuditEvents()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -357,7 +416,7 @@
       newPassword = '';
       authSession = await auth.session();
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadAuditEvents()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadCertificates(), loadAuditEvents()]);
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -512,6 +571,100 @@
                 <h3>{i18n.text('overview.emptyTitle')}</h3>
                 <p>{i18n.text('overview.emptyDescription')}</p>
               </div>
+            </div>
+
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('certificates.title')}</h2>
+                  <p>{i18n.text('certificates.description')}</p>
+                </div>
+                <button class="icon-button" type="button" title={i18n.text('services.refresh')} onclick={() => void loadCertificates()}>
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </div>
+
+              <form class="certificate-form" onsubmit={(event) => { event.preventDefault(); void submitCertificate(); }}>
+                {#if certificatesError}
+                  <div class="alert alert-danger mb-0" role="alert">{certificatesError}</div>
+                {/if}
+                <div>
+                  <label class="form-label" for="certificate-application">{i18n.text('rules.application')}</label>
+                  <select id="certificate-application" class="form-select" bind:value={certificateApplicationId}>
+                    <option value="">{i18n.text('rules.global')}</option>
+                    {#each dashboard.applications as application (application.id)}
+                      <option value={application.id}>{application.name}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-domain">{i18n.text('certificates.domain')}</label>
+                  <input id="certificate-domain" class="form-control" bind:value={certificateDomain} required maxlength="253" />
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-issuer">{i18n.text('certificates.issuer')}</label>
+                  <input id="certificate-issuer" class="form-control" bind:value={certificateIssuer} required maxlength="120" />
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-challenge">{i18n.text('certificates.challenge')}</label>
+                  <select id="certificate-challenge" class="form-select" bind:value={certificateChallengeType}>
+                    <option value="http_01">HTTP-01</option>
+                    <option value="dns_01">DNS-01</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="certificate-status">{i18n.text('certificates.status')}</label>
+                  <select id="certificate-status" class="form-select" bind:value={certificateStatus}>
+                    <option value="pending">{i18n.text('certificates.statusPending')}</option>
+                    <option value="issued">{i18n.text('certificates.statusIssued')}</option>
+                    <option value="failed">{i18n.text('certificates.statusFailed')}</option>
+                    <option value="revoked">{i18n.text('certificates.statusRevoked')}</option>
+                  </select>
+                </div>
+                <div class="certificate-form-action">
+                  <button class="btn btn-primary" type="submit" disabled={certificatesSubmitting}>
+                    <i class="bi bi-plus-lg me-1"></i>
+                    {certificatesSubmitting ? i18n.text('certificates.saving') : i18n.text('certificates.add')}
+                  </button>
+                </div>
+              </form>
+
+              {#if certificatesLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('certificates.loading')}></div>
+                </div>
+              {:else if dashboard.certificates.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-patch-check"></i>
+                  <h3>{i18n.text('certificates.emptyTitle')}</h3>
+                  <p>{i18n.text('certificates.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="table-responsive">
+                  <table class="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">{i18n.text('certificates.domain')}</th>
+                        <th scope="col">{i18n.text('rules.application')}</th>
+                        <th scope="col">{i18n.text('certificates.issuer')}</th>
+                        <th scope="col">{i18n.text('certificates.challenge')}</th>
+                        <th scope="col">{i18n.text('certificates.status')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dashboard.certificates as certificate (certificate.id)}
+                        <tr>
+                          <th scope="row">{certificate.domain}</th>
+                          <td>{certificate.applicationName ?? i18n.text('rules.global')}</td>
+                          <td>{certificate.issuer}</td>
+                          <td>{certificate.challengeType}</td>
+                          <td>{certificate.status}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
             </div>
 
             <div class="workspace-panel">
@@ -1038,7 +1191,8 @@
 
   .application-form,
   .rule-form,
-  .dns-form {
+  .dns-form,
+  .certificate-form {
     padding: 1rem;
     display: grid;
     gap: 1rem;
@@ -1058,15 +1212,21 @@
     grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1fr) 7rem minmax(12rem, 1.4fr) 7rem 7rem auto;
   }
 
+  .certificate-form {
+    grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1fr) minmax(10rem, 1fr) 9rem 9rem auto;
+  }
+
   .application-form .alert,
   .rule-form .alert,
-  .dns-form .alert {
+  .dns-form .alert,
+  .certificate-form .alert {
     grid-column: 1 / -1;
   }
 
   .application-form-action,
   .rule-form-action,
-  .dns-form-action {
+  .dns-form-action,
+  .certificate-form-action {
     display: flex;
     justify-content: flex-end;
   }
@@ -1145,13 +1305,15 @@
 
     .application-form,
     .rule-form,
-    .dns-form {
+    .dns-form,
+    .certificate-form {
       grid-template-columns: 1fr;
     }
 
     .application-form-action,
     .rule-form-action,
-    .dns-form-action {
+    .dns-form-action,
+    .certificate-form-action {
       justify-content: flex-start;
     }
   }

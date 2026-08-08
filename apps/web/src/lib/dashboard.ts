@@ -1,20 +1,14 @@
 import type { Application } from './applications';
 import type { AuditEvent } from './audit';
+import type { Certificate } from './certificates';
 import type { DnsRecord } from './dns';
 import type { WafRule } from './waf-rules';
 
 export type { Application } from './applications';
 export type { AuditEvent } from './audit';
+export type { Certificate } from './certificates';
 export type { DnsRecord } from './dns';
 export type { WafRule } from './waf-rules';
-
-export type Certificate = {
-  id: string;
-  domain: string;
-  issuer: string;
-  status: string;
-  renewal: string | null;
-};
 
 export type DashboardState = {
   applications: Application[];

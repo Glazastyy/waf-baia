@@ -37,6 +37,7 @@ struct AppState {
     waf_rules: Arc<Mutex<Vec<WafRuleRecord>>>,
     dns_zones: Arc<Mutex<Vec<DnsZoneRecord>>>,
     dns_records: Arc<Mutex<Vec<DnsRecordRecord>>>,
+    certificates: Arc<Mutex<Vec<CertificateRecord>>>,
     audit_events: Arc<Mutex<Vec<AuditEventRecord>>>,
     secure_cookies: bool,
     platform_config: PlatformConfig,
@@ -131,6 +132,31 @@ enum DnsRecordType {
 }
 
 #[derive(Clone)]
+struct CertificateRecord {
+    id: String,
+    application_id: Option<String>,
+    application_name: Option<String>,
+    domain: String,
+    issuer: String,
+    challenge_type: CertificateChallengeType,
+    status: CertificateStatus,
+}
+
+#[derive(Clone)]
+enum CertificateChallengeType {
+    Http01,
+    Dns01,
+}
+
+#[derive(Clone)]
+enum CertificateStatus {
+    Pending,
+    Issued,
+    Failed,
+    Revoked,
+}
+
+#[derive(Clone)]
 struct AuditEventRecord {
     id: String,
     actor: String,
@@ -188,6 +214,16 @@ struct CreateDnsRecordRequest {
     content: String,
     ttl: u32,
     proxied: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateCertificateRequest {
+    application_id: Option<String>,
+    domain: String,
+    issuer: String,
+    challenge_type: String,
+    status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,6 +368,24 @@ struct DnsRecordResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct CertificateListResponse {
+    items: Vec<CertificateResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CertificateResponse {
+    id: String,
+    application_id: Option<String>,
+    application_name: Option<String>,
+    domain: String,
+    issuer: String,
+    challenge_type: &'static str,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AuditEventListResponse {
     items: Vec<AuditEventResponse>,
 }
@@ -399,6 +453,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         waf_rules: Arc::new(Mutex::new(Vec::new())),
         dns_zones: Arc::new(Mutex::new(Vec::new())),
         dns_records: Arc::new(Mutex::new(Vec::new())),
+        certificates: Arc::new(Mutex::new(Vec::new())),
         audit_events: Arc::new(Mutex::new(Vec::new())),
         secure_cookies: config.secure_cookies,
         platform_config: config.platform_config,
@@ -438,7 +493,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/api/cloudflare/dns/plan", post(authenticated_json))
         .route("/api/cloudflare/dns/apply", post(authenticated_no_content))
         .route("/api/cloudflare/acme-cas", get(authenticated_json))
-        .route("/api/certificates", get(authenticated_json))
+        .route("/api/certificates", get(certificates_index).post(certificates_create))
         .route("/api/crowdsec/decisions", get(authenticated_json))
         .route("/api/audit/events", get(audit_events_index))
         .route("/api/metrics", get(authenticated_json))
@@ -809,6 +864,65 @@ async fn dns_records_create(
     (StatusCode::CREATED, Json(dns_record_response(record))).into_response()
 }
 
+async fn certificates_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let certificates = state
+        .certificates
+        .lock()
+        .expect("certificates lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(certificate_response)
+        .collect();
+
+    Json(CertificateListResponse {
+        items: certificates,
+    })
+    .into_response()
+}
+
+async fn certificates_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateCertificateRequest>,
+) -> Response {
+    let Some(session) = require_session(&state, &headers) else {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+
+    if !valid_csrf(&headers, &session) {
+        return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
+    }
+
+    let applications = state
+        .applications
+        .lock()
+        .expect("applications lock must not be poisoned");
+    let Ok(certificate) = certificate_from_request(request, &applications) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "Certificate input is invalid");
+    };
+    drop(applications);
+
+    state
+        .certificates
+        .lock()
+        .expect("certificates lock must not be poisoned")
+        .push(certificate.clone());
+    record_audit_event(
+        &state,
+        &session.username,
+        "certificate.create",
+        "certificate",
+        &certificate.id,
+        "success",
+    );
+
+    (StatusCode::CREATED, Json(certificate_response(certificate))).into_response()
+}
+
 async fn audit_events_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if require_session(&state, &headers).is_none() {
         return error(StatusCode::UNAUTHORIZED, "Authentication required");
@@ -1118,6 +1232,80 @@ impl DnsRecordType {
     }
 }
 
+fn certificate_from_request(
+    request: CreateCertificateRequest,
+    applications: &[ApplicationRecord],
+) -> Result<CertificateRecord, CertificateValidationError> {
+    let domain = normalized_hostname(&request.domain).ok_or(CertificateValidationError)?;
+    let issuer = normalized_name(&request.issuer).ok_or(CertificateValidationError)?;
+    let challenge_type =
+        certificate_challenge_type(&request.challenge_type).ok_or(CertificateValidationError)?;
+    let status = certificate_status(&request.status).ok_or(CertificateValidationError)?;
+    let (application_id, application_name) =
+        resolve_rule_application(request.application_id, applications)
+            .map_err(|_| CertificateValidationError)?;
+
+    Ok(CertificateRecord {
+        id: random_token(24),
+        application_id,
+        application_name,
+        domain,
+        issuer,
+        challenge_type,
+        status,
+    })
+}
+
+fn certificate_response(certificate: CertificateRecord) -> CertificateResponse {
+    CertificateResponse {
+        id: certificate.id,
+        application_id: certificate.application_id,
+        application_name: certificate.application_name,
+        domain: certificate.domain,
+        issuer: certificate.issuer,
+        challenge_type: certificate.challenge_type.as_str(),
+        status: certificate.status.as_str(),
+    }
+}
+
+fn certificate_challenge_type(value: &str) -> Option<CertificateChallengeType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "http_01" | "http-01" => Some(CertificateChallengeType::Http01),
+        "dns_01" | "dns-01" => Some(CertificateChallengeType::Dns01),
+        _ => None,
+    }
+}
+
+impl CertificateChallengeType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CertificateChallengeType::Http01 => "http_01",
+            CertificateChallengeType::Dns01 => "dns_01",
+        }
+    }
+}
+
+fn certificate_status(value: &str) -> Option<CertificateStatus> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pending" => Some(CertificateStatus::Pending),
+        "issued" => Some(CertificateStatus::Issued),
+        "failed" => Some(CertificateStatus::Failed),
+        "revoked" => Some(CertificateStatus::Revoked),
+        _ => None,
+    }
+}
+
+impl CertificateStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CertificateStatus::Pending => "pending",
+            CertificateStatus::Issued => "issued",
+            CertificateStatus::Failed => "failed",
+            CertificateStatus::Revoked => "revoked",
+        }
+    }
+}
+
 fn record_audit_event(
     state: &AppState,
     actor: &str,
@@ -1234,6 +1422,9 @@ struct WafRuleValidationError;
 
 #[derive(Debug, Clone, Copy)]
 struct DnsRecordValidationError;
+
+#[derive(Debug, Clone, Copy)]
+struct CertificateValidationError;
 
 fn require_session(state: &AppState, headers: &HeaderMap) -> Option<Session> {
     let session_id = session_cookie_value(headers)?;

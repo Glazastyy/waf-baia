@@ -603,6 +603,111 @@ async fn audit_events_start_empty_and_track_administrative_creates() {
     assert_eq!(items[0]["afterValue"], Value::Null);
 }
 
+#[tokio::test]
+async fn certificates_can_be_created_and_listed_without_sample_data() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+    let application = create_application(&app, &authenticated).await;
+    let application_id = application["id"].as_str().expect("application id must exist");
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/certificates")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert_eq!(response_json(empty).await["items"], serde_json::json!([]));
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/certificates")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(format!(
+                    r#"{{"applicationId":"{application_id}","domain":"portal.example.com","issuer":"letsencrypt","challengeType":"http_01","status":"pending"}}"#
+                )))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = response_json(created).await;
+    assert_eq!(created_body["applicationId"], application_id);
+    assert_eq!(created_body["applicationName"], "Portal");
+    assert_eq!(created_body["domain"], "portal.example.com");
+    assert_eq!(created_body["issuer"], "letsencrypt");
+    assert_eq!(created_body["challengeType"], "http_01");
+    assert_eq!(created_body["status"], "pending");
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/certificates")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    let listed_body = response_json(listed).await;
+    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(listed_body["items"][0]["domain"], "portal.example.com");
+}
+
+#[tokio::test]
+async fn certificates_reject_invalid_input_without_mutating_state() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/certificates")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"applicationId":"missing","domain":"bad domain","issuer":"","challengeType":"manual","status":"issued"}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/certificates")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)

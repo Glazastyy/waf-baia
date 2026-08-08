@@ -16,6 +16,7 @@ fn api_contract_exposes_expected_initial_resources() {
     assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/cloudflare/dns/plan")));
     assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/cloudflare/dns/apply")));
     assert!(routes.contains(&ApiRoute::new(Method::Get, "/api/cloudflare/acme-cas")));
+    assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/certificates")));
     assert!(routes.contains(&ApiRoute::new(Method::Get, "/api/audit/events")));
     assert!(routes.contains(&ApiRoute::new(Method::Post, "/api/caddy/apply")));
 }
