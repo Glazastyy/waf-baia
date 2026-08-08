@@ -1,7 +1,9 @@
 use baia_core::auth::{BootstrapState, bootstrap_initial_admin};
 use baia_core::config::PlatformConfig;
+use baia_core::server::{ServerConfig, serve};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config = PlatformConfig::default();
     config
         .validate()
@@ -14,5 +16,12 @@ fn main() {
         println!("Login URL: {}/login", config.platform.public_url);
     }
 
-    println!("Baia Core control plane initialized");
+    let server_config = ServerConfig::from_env();
+    println!(
+        "Baia Core control plane listening on {}",
+        server_config.bind_addr
+    );
+    serve(server_config)
+        .await
+        .expect("Baia Core HTTP server must keep running");
 }

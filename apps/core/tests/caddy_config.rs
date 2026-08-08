@@ -31,7 +31,21 @@ fn caddy_config_contains_routes_upstreams_and_security_headers() {
     let json = serde_json::to_value(config).expect("config must be serializable");
 
     assert_eq!(json["apps"]["http"]["servers"]["baia"]["listen"][0], ":443");
+    assert_eq!(
+        json["apps"]["http"]["servers"]["baia_http"]["listen"][0],
+        ":80"
+    );
     assert!(json.to_string().contains("app-a:8080"));
     assert!(json.to_string().contains("X-Content-Type-Options"));
     assert!(json.to_string().contains("block-admin"));
+    assert!(
+        json["apps"]["http"]["servers"]["baia_http"]["routes"]
+            .to_string()
+            .contains("Direct origin access is not allowed")
+    );
+    assert!(
+        json["apps"]["http"]["servers"]["baia_http"]["routes"]
+            .to_string()
+            .contains("example.test")
+    );
 }

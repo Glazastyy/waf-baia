@@ -6,6 +6,9 @@ export type CaddyfileOptions = {
   adminHostname: string;
 };
 
+const directOriginBlockPage =
+  '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Direct origin access is not allowed</title><style>body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f6f7f9;color:#17202a;display:grid;min-height:100vh;place-items:center}.panel{max-width:720px;padding:40px;border-top:4px solid #d33;background:#fff;box-shadow:0 16px 48px rgba(15,23,42,.12)}h1{font-size:28px;margin:0 0 12px}p{font-size:16px;line-height:1.55;margin:0 0 10px}.code{font-size:13px;color:#5b6673;text-transform:uppercase;letter-spacing:.08em}</style></head><body><main class="panel"><div class="code">Baia WAF 403</div><h1>Direct origin access is not allowed</h1><p>This hostname is not registered in Baia WAF or the request reached the origin directly by IP.</p><p>Register the domain in Baia WAF and access it through its configured hostname.</p></main></body></html>';
+
 export async function writeGeneratedCaddyfile(root: string): Promise<string> {
   const platform = await readFile(join(root, 'config', 'platform.yaml'), 'utf8');
   const adminHostname = readYamlValue(platform, ['platform', 'adminHostname']) ?? 'admin.waf.localhost';
@@ -18,6 +21,7 @@ export async function writeGeneratedCaddyfile(root: string): Promise<string> {
 export function renderCaddyfile(options: CaddyfileOptions): string {
   const adminHostname = normalizeHostname(options.adminHostname);
   const tlsPolicy = isLocalCertificateHostname(adminHostname) ? ['\ttls internal'] : [];
+  const directOriginResponse = caddyQuotedString(directOriginBlockPage);
 
   return [
     '{',
@@ -28,13 +32,23 @@ export function renderCaddyfile(options: CaddyfileOptions): string {
     '\t}',
     '}',
     '',
+    `http://${adminHostname} {`,
+    '\trespond /health "ok" 200',
+    '\tredir https://{host}{uri} permanent',
+    '}',
+    '',
     ':80 {',
     '\trespond /health "ok" 200',
+    '\theader Content-Type "text/html; charset=utf-8"',
+    `\trespond ${directOriginResponse} 403`,
     '}',
     '',
     `${adminHostname} {`,
     ...tlsPolicy,
     '\trespond /health "ok" 200',
+    '\thandle /api* {',
+    '\t\treverse_proxy core:8080',
+    '\t}',
     '\treverse_proxy web:80',
     '}',
     ''
@@ -82,6 +96,10 @@ function isLocalIpAddress(value: string): boolean {
 
 function normalizeHostname(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/\.$/, '');
+}
+
+function caddyQuotedString(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 function readYamlValue(raw: string, path: string[]): string | undefined {

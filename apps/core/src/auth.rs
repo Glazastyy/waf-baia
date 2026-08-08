@@ -1,4 +1,5 @@
-use argon2::password_hash::SaltString;
+use argon2::PasswordVerifier;
+use argon2::password_hash::{PasswordHash, SaltString};
 use argon2::{Argon2, PasswordHasher};
 use rand::distr::{Alphanumeric, SampleString};
 use std::sync::{Arc, Mutex};
@@ -38,10 +39,7 @@ impl BootstrapAdmin {
         let salt_material = Alphanumeric.sample_string(&mut rng, 32);
         let salt =
             SaltString::from_b64(&salt_material).expect("generated salt must be valid PHC base64");
-        let password_hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .expect("argon2id password hashing must be available")
-            .to_string();
+        let password_hash = hash_password_with_salt(&password, &salt);
 
         Self {
             username: username.to_string(),
@@ -70,4 +68,30 @@ pub fn bootstrap_initial_admin(state: BootstrapState) -> Option<BootstrapAdmin> 
         BootstrapState::NoAdmin => Some(BootstrapAdmin::new("admin")),
         BootstrapState::AdminExists => None,
     }
+}
+
+pub fn hash_password(password: &str) -> String {
+    let mut rng = rand::rng();
+    let salt_material = Alphanumeric.sample_string(&mut rng, 32);
+    let salt =
+        SaltString::from_b64(&salt_material).expect("generated salt must be valid PHC base64");
+    hash_password_with_salt(password, &salt)
+}
+
+pub fn verify_password(password: &str, password_hash: &str) -> bool {
+    PasswordHash::new(password_hash)
+        .ok()
+        .and_then(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .ok()
+        })
+        .is_some()
+}
+
+fn hash_password_with_salt(password: &str, salt: &SaltString) -> String {
+    Argon2::default()
+        .hash_password(password.as_bytes(), salt)
+        .expect("argon2id password hashing must be available")
+        .to_string()
 }

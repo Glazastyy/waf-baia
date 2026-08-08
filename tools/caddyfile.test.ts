@@ -15,7 +15,14 @@ describe('static Caddyfile bootstrap', () => {
     expect(caddyfile).toContain('admin.waf.localhost {');
     expect(caddyfile).toContain('tls internal');
     expect(caddyfile).toContain('respond /health "ok" 200');
+    expect(caddyfile).toContain('handle /api* {');
+    expect(caddyfile).toContain('reverse_proxy core:8080');
     expect(caddyfile).toContain('reverse_proxy web:80');
+    expect(caddyfile).toContain('http://admin.waf.localhost {');
+    expect(caddyfile).toContain('Direct origin access is not allowed');
+    expect(caddyfile).toContain('This hostname is not registered in Baia WAF');
+    expect(caddyfile).toContain('respond "');
+    expect(caddyfile).toContain(' 403');
   });
 });
 
@@ -24,7 +31,12 @@ describe('generated Caddyfile bootstrap', () => {
     const caddyfile = renderCaddyfile({ adminHostname: 'admin.waf.localhost' });
 
     expect(caddyfile).toContain('admin.waf.localhost {');
+    expect(caddyfile).toContain('http://admin.waf.localhost {');
+    expect(caddyfile).toContain('redir https://{host}{uri} permanent');
+    expect(caddyfile).toContain('Direct origin access is not allowed');
     expect(caddyfile).toContain('tls internal');
+    expect(caddyfile).toContain('handle /api* {');
+    expect(caddyfile).toContain('reverse_proxy core:8080');
     expect(caddyfile).toContain('reverse_proxy web:80');
   });
 
@@ -32,6 +44,7 @@ describe('generated Caddyfile bootstrap', () => {
     const caddyfile = renderCaddyfile({ adminHostname: 'waf.example.com' });
 
     expect(caddyfile).toContain('waf.example.com {');
+    expect(caddyfile).toContain('http://waf.example.com {');
     expect(caddyfile).not.toContain('tls internal');
     expect(caddyfile).toContain('reverse_proxy web:80');
   });

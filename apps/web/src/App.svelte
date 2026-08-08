@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { createAuthClient, type AuthSession } from './lib/auth';
   import { localize, resolveLocale, supportedLocales, type Locale, type MessageKey } from './lib/i18n';
 
   type ServiceStatus = 'healthy' | 'degraded' | 'disabled';
@@ -50,9 +52,23 @@
   const languageStorageKey = 'baia.locale';
   const initialLocale = resolveLocale(localStorage.getItem(languageStorageKey) ?? navigator.language);
   persistLocale(initialLocale);
+  const auth = createAuthClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
+  let authSession = $state<AuthSession>({ authenticated: false, user: null, csrfToken: null });
+  let authLoading = $state(true);
+  let authSubmitting = $state(false);
+  let loginUsername = $state('admin');
+  let loginPassword = $state('');
+  let loginError = $state('');
+  let currentPassword = $state('');
+  let newPassword = $state('');
+  let changePasswordError = $state('');
+
+  onMount(() => {
+    void refreshSession();
+  });
 
   let services = $state<Service[]>([
     { name: 'Core API', roleKey: 'service.core.role', status: 'healthy', detailKey: 'service.core.detail' },
@@ -166,9 +182,116 @@
     document.documentElement.lang = nextLocale;
     localStorage.setItem(languageStorageKey, nextLocale);
   }
+
+  async function refreshSession(): Promise<void> {
+    authLoading = true;
+    try {
+      authSession = await auth.session();
+    } catch {
+      authSession = { authenticated: false, user: null, csrfToken: null };
+    } finally {
+      authLoading = false;
+    }
+  }
+
+  async function submitLogin(): Promise<void> {
+    authSubmitting = true;
+    loginError = '';
+    try {
+      authSession = await auth.login(loginUsername, loginPassword);
+      loginPassword = '';
+    } catch {
+      loginError = i18n.text('auth.loginError');
+    } finally {
+      authSubmitting = false;
+    }
+  }
+
+  async function submitLogout(): Promise<void> {
+    authSession = await auth.logout();
+  }
+
+  async function submitPasswordChange(): Promise<void> {
+    authSubmitting = true;
+    changePasswordError = '';
+    try {
+      await auth.changePassword(currentPassword, newPassword);
+      currentPassword = '';
+      newPassword = '';
+      authSession = await auth.session();
+    } catch {
+      changePasswordError = i18n.text('auth.changePasswordError');
+    } finally {
+      authSubmitting = false;
+    }
+  }
 </script>
 
 <main class="min-vh-100 bg-body-tertiary">
+  {#if authLoading}
+    <section class="auth-shell">
+      <div class="auth-panel">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-shield-lock fs-4"></i>
+          <span class="fw-semibold">Baia WAF</span>
+        </div>
+        <div class="spinner-border mt-4" role="status" aria-label={i18n.text('auth.loading')}></div>
+      </div>
+    </section>
+  {:else if !authSession.authenticated}
+    <section class="auth-shell">
+      <form class="auth-panel" onsubmit={(event) => { event.preventDefault(); void submitLogin(); }}>
+        <div class="d-flex align-items-center gap-2 mb-4">
+          <i class="bi bi-shield-lock fs-4"></i>
+          <div>
+            <div class="fw-semibold">Baia WAF</div>
+            <div class="text-body-secondary small">{i18n.text('auth.signInSubtitle')}</div>
+          </div>
+        </div>
+        {#if loginError}
+          <div class="alert alert-danger" role="alert">{loginError}</div>
+        {/if}
+        <div class="mb-3">
+          <label class="form-label" for="login-username">{i18n.text('auth.username')}</label>
+          <input id="login-username" class="form-control" autocomplete="username" bind:value={loginUsername} required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="login-password">{i18n.text('auth.password')}</label>
+          <input id="login-password" class="form-control" type="password" autocomplete="current-password" bind:value={loginPassword} required />
+        </div>
+        <button class="btn btn-primary w-100" type="submit" disabled={authSubmitting}>
+          {authSubmitting ? i18n.text('auth.signingIn') : i18n.text('auth.signIn')}
+        </button>
+      </form>
+    </section>
+  {:else if authSession.user?.passwordChangeRequired}
+    <section class="auth-shell">
+      <form class="auth-panel" onsubmit={(event) => { event.preventDefault(); void submitPasswordChange(); }}>
+        <div class="d-flex align-items-center gap-2 mb-4">
+          <i class="bi bi-key fs-4"></i>
+          <div>
+            <div class="fw-semibold">{i18n.text('auth.changePasswordTitle')}</div>
+            <div class="text-body-secondary small">{i18n.text('auth.changePasswordSubtitle')}</div>
+          </div>
+        </div>
+        {#if changePasswordError}
+          <div class="alert alert-danger" role="alert">{changePasswordError}</div>
+        {/if}
+        <div class="mb-3">
+          <label class="form-label" for="current-password">{i18n.text('auth.currentPassword')}</label>
+          <input id="current-password" class="form-control" type="password" autocomplete="current-password" bind:value={currentPassword} required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="new-password">{i18n.text('auth.newPassword')}</label>
+          <input id="new-password" class="form-control" type="password" autocomplete="new-password" minlength="16" bind:value={newPassword} required />
+          <div class="form-text">{i18n.text('auth.passwordPolicy')}</div>
+        </div>
+        <button class="btn btn-primary w-100" type="submit" disabled={authSubmitting}>
+          {authSubmitting ? i18n.text('auth.saving') : i18n.text('auth.savePassword')}
+        </button>
+      </form>
+    </section>
+  {:else}
   <nav class="navbar navbar-expand-lg bg-dark border-bottom border-secondary" data-bs-theme="dark">
     <div class="container-fluid">
       <a class="navbar-brand fw-semibold" href="/">
@@ -199,6 +322,10 @@
           <button class="btn btn-warning btn-sm" type="button">
             <i class="bi bi-exclamation-triangle me-1"></i>
             {i18n.text('nav.pendingActions', { count: 2 })}
+          </button>
+          <button class="btn btn-outline-light btn-sm" type="button" onclick={() => void submitLogout()}>
+            <i class="bi bi-box-arrow-right me-1"></i>
+            {i18n.text('auth.logout')}
           </button>
         </div>
       </div>
@@ -431,6 +558,7 @@
       </section>
     </div>
   </div>
+  {/if}
 </main>
 
 <style>
@@ -448,5 +576,21 @@
 
   .language-select {
     min-width: 8.5rem;
+  }
+
+  .auth-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 1.5rem;
+  }
+
+  .auth-panel {
+    width: min(100%, 28rem);
+    background: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: .5rem;
+    padding: 2rem;
+    box-shadow: 0 1rem 3rem rgba(15, 23, 42, .16);
   }
 </style>
