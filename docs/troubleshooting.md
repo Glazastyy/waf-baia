@@ -61,13 +61,12 @@ Validate a tag manually:
 docker manifest inspect crowdsecurity/crowdsec:v1.7.8
 ```
 
-## Port 80, 443 Or 2019 Is Already In Use
+## Port 80 Or 443 Is Already In Use
 
 The default Compose stack publishes:
 
 - `80`
 - `443`
-- `2019`
 
 Stop the conflicting service or edit `deploy/compose/docker-compose.yml` for local development.
 
@@ -108,7 +107,7 @@ services:
   caddyAdminUrl: http://caddy:2019
 ```
 
-Inside Compose, `caddy` is the service hostname. From the host, use the published port when testing manually.
+Inside Compose, `caddy` is the service hostname. The default stack does not publish the Caddy Admin API to the host.
 
 ## Cloudflare DNS Automation Does Not Work
 

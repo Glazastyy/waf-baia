@@ -29,4 +29,16 @@ describe('compose image tags', () => {
     expect(dockerfile).toContain('FROM caddy:2.11.4-alpine');
     expect(dockerfile).not.toContain('FROM caddy:2.10-alpine');
   });
+
+  test('only publishes public HTTP and HTTPS ports on the host', () => {
+    const compose = readFileSync(composePath, 'utf8');
+
+    expect(compose).toContain('- "80:80"');
+    expect(compose).toContain('- "443:443"');
+    expect(compose).not.toContain('- "2019:2019"');
+    expect(compose).not.toContain('- "5432:5432"');
+    expect(compose).not.toContain('- "6379:6379"');
+    expect(compose).not.toContain('- "8081:8081"');
+    expect(compose).not.toContain('- "53:53"');
+  });
 });

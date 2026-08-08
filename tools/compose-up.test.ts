@@ -69,7 +69,7 @@ describe('compose up helper', () => {
     expect(output.at(-4)).toBe('Admin URL: https://admin.example.test/login');
     expect(output.at(-3)).toBe('Admin user: admin');
     expect(output.at(-2)?.startsWith('Initial admin password: ')).toBe(true);
-    expect(output.at(-1)).toBe('Caddy admin API: http://localhost:2019');
+    expect(output.at(-1)).toBe('Caddy admin API: internal only (http://caddy:2019)');
   });
 
   test('adds missing initial admin password to existing secrets without replacing values', async () => {

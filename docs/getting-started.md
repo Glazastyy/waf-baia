@@ -7,7 +7,7 @@ This guide brings a fresh Baia WAF checkout to a locally runnable stack with the
 - Docker with Compose support
 - Bun
 - Cargo and a Rust toolchain for local Core development
-- Ports `80`, `443` and `2019` available when running the default Compose stack
+- Ports `80` and `443` available when running the default Compose stack
 
 ## First Start
 

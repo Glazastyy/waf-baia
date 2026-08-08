@@ -88,7 +88,7 @@ async function readAccessDetails(root: string): Promise<AccessDetails> {
     adminUrl: new URL('/login', normalizedUrl(publicUrl)).toString(),
     adminUser: 'admin',
     initialAdminPassword,
-    caddyAdminApi: 'http://localhost:2019'
+    caddyAdminApi: 'internal only (http://caddy:2019)'
   };
 }
 
