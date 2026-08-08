@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { defaultLocale, isSupportedLocale, localize, supportedLocales, translate } from './i18n';
+import { defaultLocale, isSupportedLocale, localize, missingTranslationKeys, supportedLocales, translate } from './i18n';
 
 describe('i18n', () => {
   test('declares Portuguese, English, Spanish, German and Russian as supported locales', () => {
@@ -19,6 +19,19 @@ describe('i18n', () => {
     expect(translate('es', 'nav.overview')).toBe('Resumen');
     expect(translate('de', 'nav.overview')).toBe('Ubersicht');
     expect(translate('ru', 'nav.overview')).toBe('Обзор');
+  });
+
+  test('translates application body content outside the navigation', () => {
+    expect(translate('en', 'applications.emptyTitle')).toBe('No applications registered');
+    expect(translate('es', 'applications.emptyTitle')).toBe('No hay aplicaciones registradas');
+    expect(translate('de', 'applications.emptyTitle')).toBe('Keine Anwendungen registriert');
+    expect(translate('ru', 'applications.emptyTitle')).toBe('Нет зарегистрированных приложений');
+  });
+
+  test('keeps every supported locale complete', () => {
+    for (const locale of supportedLocales) {
+      expect(missingTranslationKeys(locale.code)).toEqual([]);
+    }
   });
 
   test('falls back to the default locale for invalid locale input', () => {
