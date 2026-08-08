@@ -57,10 +57,21 @@
         },
         "cloudflare": {
           "type": "object",
+          "required": ["automaticDns"],
           "additionalProperties": false,
           "properties": {
             "apiTokenEnv": { "type": "string", "minLength": 1 },
-            "accountId": { "type": "string", "minLength": 1 }
+            "accountId": { "type": "string", "minLength": 1 },
+            "automaticDns": {
+              "type": "object",
+              "required": ["enabled", "defaultProxied", "requireDoubleProxyAcknowledgement"],
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "defaultProxied": { "type": "boolean" },
+                "requireDoubleProxyAcknowledgement": { "type": "boolean" }
+              }
+            }
           }
         },
         "crowdsec": {

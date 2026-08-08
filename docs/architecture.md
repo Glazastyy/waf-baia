@@ -157,6 +157,10 @@ Modo externo: o Core recebe URL e API key via configuração/secret e usa o mesm
 
 Cloudflare é usado para DNS gerenciado e DNS-01. O token deve ter escopo mínimo por zona: leitura de zona e edição de DNS. O painel deve separar zonas importadas de zonas gerenciadas pela plataforma.
 
+Ao colocar um domínio no WAF, o Core pode planejar e aplicar registros A e AAAA automaticamente na zona Cloudflare, com `proxied` ativo ou desativado. Quando `proxied` estiver ativo na Cloudflare e o tráfego também passar pelo Baia WAF, o plano deve exibir aviso explícito de duplo proxy, pois uma composição incorreta pode deixar a aplicação offline ou criar loop.
+
+O Core também mantém um catálogo de CAs ACME conhecidas para sugerir o domínio CAA correto. Para Let's Encrypt o CAA padrão é `letsencrypt.org`; para Google Trust Services é `pki.goog`; para Sectigo e ZeroSSL é `sectigo.com`. Para CAs não reconhecidas, o administrador informa manualmente o domínio CAA.
+
 ## 15. Integração com CrowdSec
 
 CrowdSec fornece reputação e decisões. O Caddy bouncer aplica bloqueios no caminho de requisição. O Core consulta a Local API para exibição, remoção autorizada de decisões e auditoria. Logs do Caddy alimentam a coleção `crowdsecurity/caddy`.
@@ -164,6 +168,8 @@ CrowdSec fornece reputação e decisões. O Caddy bouncer aplica bloqueios no ca
 ## 16. Estratégia de ACME
 
 HTTP-01 é o padrão para certificados simples. DNS-01 é obrigatório para wildcard. O Caddy/CertMagic gerencia emissão e renovação; o Core registra estado, erros, domínio, challenge e datas no PostgreSQL. Em ambientes distribuídos, storage Redis para Caddy evita inconsistência entre instâncias.
+
+Quando a emissão usar uma CA ACME diferente da Let's Encrypt, o Core deve planejar registros CAA `issue` e, para wildcard, `issuewild`, utilizando o catálogo de CAs conhecidas ou um domínio CAA customizado informado pelo administrador.
 
 ## 17. Sistema de Regras do WAF
 

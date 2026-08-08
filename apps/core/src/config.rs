@@ -70,6 +70,14 @@ pub enum PowerDnsMode {
 pub struct CloudflareIntegration {
     pub api_token_env: Option<String>,
     pub account_id: Option<String>,
+    pub automatic_dns: CloudflareAutomaticDnsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudflareAutomaticDnsConfig {
+    pub enabled: bool,
+    pub default_proxied: bool,
+    pub require_double_proxy_acknowledgement: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +183,11 @@ impl Default for PlatformConfig {
                 cloudflare: CloudflareIntegration {
                     api_token_env: Some("BAIA_CLOUDFLARE_API_TOKEN".to_string()),
                     account_id: None,
+                    automatic_dns: CloudflareAutomaticDnsConfig {
+                        enabled: true,
+                        default_proxied: false,
+                        require_double_proxy_acknowledgement: true,
+                    },
                 },
                 crowdsec: CrowdSecIntegration {
                     local_api_url: Some("http://crowdsec:8080".to_string()),

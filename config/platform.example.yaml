@@ -35,6 +35,10 @@ integrations:
     apiKeyEnv: BAIA_POWERDNS_API_KEY
   cloudflare:
     apiTokenEnv: BAIA_CLOUDFLARE_API_TOKEN
+    automaticDns:
+      enabled: true
+      defaultProxied: false
+      requireDoubleProxyAcknowledgement: true
   crowdsec:
     localApiUrl: http://crowdsec:8080
     apiKeyEnv: BAIA_CROWDSEC_API_KEY

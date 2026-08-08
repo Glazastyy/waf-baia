@@ -7,6 +7,8 @@ fn default_config_enables_required_foundation_modules() {
     assert!(config.modules.acme.enabled);
     assert!(config.modules.redis.enabled);
     assert!(config.modules.metrics.enabled);
+    assert!(config.integrations.cloudflare.automatic_dns.enabled);
+    assert!(!config.integrations.cloudflare.automatic_dns.default_proxied);
     assert_eq!(config.services.postgres.host, "postgres");
     assert_eq!(config.services.redis.host, "redis");
 }

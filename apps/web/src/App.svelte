@@ -25,6 +25,18 @@
     renewalKey: MessageKey;
   };
 
+  type PlannedDnsRecord = {
+    type: string;
+    name: string;
+    value: string;
+    modeKey: MessageKey;
+  };
+
+  type KnownCa = {
+    name: string;
+    caaDomain: string;
+  };
+
   const languageStorageKey = 'baia.locale';
   const initialLocale = resolveLocale(localStorage.getItem(languageStorageKey) ?? navigator.language);
   persistLocale(initialLocale);
@@ -73,6 +85,22 @@
       statusKey: 'certificate.wildcard.status',
       renewalKey: 'certificate.wildcard.renewal'
     }
+  ]);
+
+  let plannedDnsRecords = $state<PlannedDnsRecord[]>([
+    { type: 'A', name: 'app.example.test', value: '203.0.113.10', modeKey: 'cloudflare.proxyOff' },
+    { type: 'AAAA', name: 'app.example.test', value: '2001:db8::a', modeKey: 'cloudflare.proxyOff' },
+    { type: 'CAA', name: 'example.test', value: '0 issue "pki.goog"', modeKey: 'cloudflare.proxyOff' }
+  ]);
+
+  let knownCas = $state<KnownCa[]>([
+    { name: 'Let’s Encrypt', caaDomain: 'letsencrypt.org' },
+    { name: 'Google Trust Services', caaDomain: 'pki.goog' },
+    { name: 'Sectigo / ZeroSSL', caaDomain: 'sectigo.com' },
+    { name: 'DigiCert', caaDomain: 'digicert.com' },
+    { name: 'GlobalSign', caaDomain: 'globalsign.com' },
+    { name: 'SSL.com', caaDomain: 'ssl.com' },
+    { name: 'Buypass', caaDomain: 'buypass.com' }
   ]);
 
   function statusClass(status: ServiceStatus): string {
@@ -239,6 +267,60 @@
                 </div>
               </div>
             {/each}
+          </div>
+        </div>
+      </section>
+
+      <section class="col-12">
+        <div class="card shadow-sm">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">{i18n.text('cloudflare.title')}</span>
+            <span class="badge text-bg-secondary">{i18n.text('cloudflare.proxyOff')}</span>
+          </div>
+          <div class="card-body">
+            <div class="alert alert-warning d-flex gap-2" role="alert">
+              <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
+              <div>
+                <div class="fw-semibold">{i18n.text('cloudflare.warningTitle')}</div>
+                <div>{i18n.text('cloudflare.doubleProxyWarning')}</div>
+              </div>
+            </div>
+            <div class="row g-4">
+              <div class="col-12 col-xl-7">
+                <div class="fw-semibold mb-2">{i18n.text('cloudflare.dnsRecords')}</div>
+                <div class="table-responsive">
+                  <table class="table table-sm align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">Type</th>
+                        <th scope="col">{i18n.text('certificates.domain')}</th>
+                        <th scope="col">Value</th>
+                        <th scope="col">{i18n.text('cloudflare.mode')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each plannedDnsRecords as record (`${record.type}:${record.name}:${record.value}`)}
+                        <tr>
+                          <td><span class="badge text-bg-light border">{record.type}</span></td>
+                          <td>{record.name}</td>
+                          <td><code>{record.value}</code></td>
+                          <td>{i18n.text(record.modeKey)}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="col-12 col-xl-5">
+                <div class="fw-semibold mb-2">{i18n.text('cloudflare.caaTitle')}</div>
+                <p class="text-body-secondary small">{i18n.text('cloudflare.caaDescription')}</p>
+                <div class="d-flex flex-wrap gap-2">
+                  {#each knownCas as ca (ca.name)}
+                    <span class="badge text-bg-light border">{ca.name}: {ca.caaDomain}</span>
+                  {/each}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
