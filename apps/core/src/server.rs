@@ -37,6 +37,7 @@ struct AppState {
     waf_rules: Arc<Mutex<Vec<WafRuleRecord>>>,
     dns_zones: Arc<Mutex<Vec<DnsZoneRecord>>>,
     dns_records: Arc<Mutex<Vec<DnsRecordRecord>>>,
+    audit_events: Arc<Mutex<Vec<AuditEventRecord>>>,
     secure_cookies: bool,
     platform_config: PlatformConfig,
 }
@@ -127,6 +128,17 @@ enum DnsRecordType {
     Txt,
     Caa,
     Mx,
+}
+
+#[derive(Clone)]
+struct AuditEventRecord {
+    id: String,
+    actor: String,
+    action: &'static str,
+    resource_type: &'static str,
+    resource_id: String,
+    result: &'static str,
+    occurred_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,6 +330,24 @@ struct DnsRecordResponse {
     proxied: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditEventListResponse {
+    items: Vec<AuditEventResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditEventResponse {
+    id: String,
+    actor: String,
+    action: &'static str,
+    resource_type: &'static str,
+    resource_id: String,
+    result: &'static str,
+    occurred_at: String,
+}
+
 impl ServerConfig {
     pub fn from_env() -> Self {
         let bind_addr = std::env::var("BAIA_CORE_BIND")
@@ -369,6 +399,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         waf_rules: Arc::new(Mutex::new(Vec::new())),
         dns_zones: Arc::new(Mutex::new(Vec::new())),
         dns_records: Arc::new(Mutex::new(Vec::new())),
+        audit_events: Arc::new(Mutex::new(Vec::new())),
         secure_cookies: config.secure_cookies,
         platform_config: config.platform_config,
     };
@@ -409,7 +440,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/api/cloudflare/acme-cas", get(authenticated_json))
         .route("/api/certificates", get(authenticated_json))
         .route("/api/crowdsec/decisions", get(authenticated_json))
-        .route("/api/audit/events", get(authenticated_json))
+        .route("/api/audit/events", get(audit_events_index))
         .route("/api/metrics", get(authenticated_json))
         .route("/api/caddy/apply", post(authenticated_no_content))
         .with_state(state)
@@ -633,6 +664,14 @@ async fn applications_create(
     }
 
     applications.push(application.clone());
+    record_audit_event(
+        &state,
+        &session.username,
+        "application.create",
+        "application",
+        &application.id,
+        "success",
+    );
 
     (StatusCode::CREATED, Json(application_response(application))).into_response()
 }
@@ -681,6 +720,14 @@ async fn waf_rules_create(
         .lock()
         .expect("waf rules lock must not be poisoned")
         .push(rule.clone());
+    record_audit_event(
+        &state,
+        &session.username,
+        "waf_rule.create",
+        "waf_rule",
+        &rule.id,
+        "success",
+    );
 
     (StatusCode::CREATED, Json(waf_rule_response(rule))).into_response()
 }
@@ -750,8 +797,33 @@ async fn dns_records_create(
         .lock()
         .expect("dns records lock must not be poisoned")
         .push(record.clone());
+    record_audit_event(
+        &state,
+        &session.username,
+        "dns_record.create",
+        "dns_record",
+        &record.id,
+        "success",
+    );
 
     (StatusCode::CREATED, Json(dns_record_response(record))).into_response()
+}
+
+async fn audit_events_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let events = state
+        .audit_events
+        .lock()
+        .expect("audit events lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(audit_event_response)
+        .collect();
+
+    Json(AuditEventListResponse { items: events }).into_response()
 }
 
 async fn authenticated_no_content(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1044,6 +1116,48 @@ impl DnsRecordType {
             DnsRecordType::Mx => "MX",
         }
     }
+}
+
+fn record_audit_event(
+    state: &AppState,
+    actor: &str,
+    action: &'static str,
+    resource_type: &'static str,
+    resource_id: &str,
+    result: &'static str,
+) {
+    state
+        .audit_events
+        .lock()
+        .expect("audit events lock must not be poisoned")
+        .push(AuditEventRecord {
+            id: random_token(24),
+            actor: actor.to_string(),
+            action,
+            resource_type,
+            resource_id: resource_id.to_string(),
+            result,
+            occurred_at: unix_timestamp_string(),
+        });
+}
+
+fn audit_event_response(event: AuditEventRecord) -> AuditEventResponse {
+    AuditEventResponse {
+        id: event.id,
+        actor: event.actor,
+        action: event.action,
+        resource_type: event.resource_type,
+        resource_id: event.resource_id,
+        result: event.result,
+        occurred_at: event.occurred_at,
+    }
+}
+
+fn unix_timestamp_string() -> String {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
 }
 
 fn normalized_name(value: &str) -> Option<String> {

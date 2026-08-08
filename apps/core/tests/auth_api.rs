@@ -552,6 +552,57 @@ async fn dns_records_reject_invalid_input_without_mutating_state() {
     assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
 }
 
+#[tokio::test]
+async fn audit_events_start_empty_and_track_administrative_creates() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/audit/events")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert_eq!(response_json(empty).await["items"], serde_json::json!([]));
+
+    let application = create_application(&app, &authenticated).await;
+    let application_id = application["id"].as_str().expect("application id must exist");
+    create_waf_rule(&app, &authenticated, application_id).await;
+    create_dns_record(&app, &authenticated).await;
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/audit/events")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    let body = response_json(listed).await;
+    let items = body["items"].as_array().expect("items must be array");
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["actor"], "admin");
+    assert_eq!(items[0]["action"], "application.create");
+    assert_eq!(items[0]["resourceType"], "application");
+    assert_eq!(items[0]["result"], "success");
+    assert_eq!(items[1]["action"], "waf_rule.create");
+    assert_eq!(items[2]["action"], "dns_record.create");
+    assert_eq!(items[0]["beforeValue"], Value::Null);
+    assert_eq!(items[0]["afterValue"], Value::Null);
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -624,6 +675,54 @@ async fn create_application(app: &axum::Router, authenticated: &AuthenticatedSes
                 .header("x-csrf-token", authenticated.csrf_token.as_str())
                 .body(Body::from(
                     r#"{"name":"Portal","hostname":"portal.example.com","upstreams":[{"dial":"10.0.0.20:8080"}]}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    response_json(response).await
+}
+
+async fn create_waf_rule(
+    app: &axum::Router,
+    authenticated: &AuthenticatedSession,
+    application_id: &str,
+) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/waf/rules")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(format!(
+                    r#"{{"name":"Block admin paths","applicationId":"{application_id}","priority":10,"action":"block","pathPrefix":"/admin"}}"#
+                )))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    response_json(response).await
+}
+
+async fn create_dns_record(app: &axum::Router, authenticated: &AuthenticatedSession) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/dns/records")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"zoneName":"example.com","name":"portal.example.com","recordType":"A","content":"10.0.0.20","ttl":300,"proxied":false}"#,
                 ))
                 .expect("request must build"),
         )

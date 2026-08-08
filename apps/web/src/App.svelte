@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createApplicationsClient } from './lib/applications';
+  import { createAuditClient } from './lib/audit';
   import { createAuthClient, type AuthSession } from './lib/auth';
   import {
     componentStatusesFromConfiguration,
@@ -28,6 +29,7 @@
   const applicationsClient = createApplicationsClient();
   const wafRulesClient = createWafRulesClient();
   const dnsClient = createDnsClient();
+  const auditClient = createAuditClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -63,6 +65,8 @@
   let dnsLoading = $state(false);
   let dnsSubmitting = $state(false);
   let dnsError = $state('');
+  let auditLoading = $state(false);
+  let auditError = $state('');
   let currentRoute = $state<AdminRoute>(resolveAdminRoute(window.location.pathname));
   let dashboard = $state<DashboardState>(createEmptyDashboard());
   let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
@@ -199,6 +203,19 @@
     }
   }
 
+  async function loadAuditEvents(): Promise<void> {
+    auditLoading = true;
+    auditError = '';
+    try {
+      dashboard.auditEvents = await auditClient.list();
+    } catch {
+      dashboard.auditEvents = [];
+      auditError = i18n.text('audit.loadError');
+    } finally {
+      auditLoading = false;
+    }
+  }
+
   async function submitApplication(): Promise<void> {
     const csrfToken = authSession.csrfToken;
 
@@ -219,6 +236,7 @@
       applicationName = '';
       applicationHostname = '';
       applicationUpstreamDial = '';
+      await loadAuditEvents();
     } catch {
       applicationsError = i18n.text('applications.saveError');
     } finally {
@@ -250,6 +268,7 @@
       wafRulePriority = 100;
       wafRuleAction = 'block';
       wafRulePathPrefix = '';
+      await loadAuditEvents();
     } catch {
       wafRulesError = i18n.text('rules.saveError');
     } finally {
@@ -283,6 +302,7 @@
       dnsRecordContent = '';
       dnsRecordTtl = 300;
       dnsRecordProxied = false;
+      await loadAuditEvents();
     } catch {
       dnsError = i18n.text('dns.saveError');
     } finally {
@@ -296,7 +316,7 @@
       authSession = await auth.session();
       if (authSession.authenticated) {
         syncAuthenticatedPath();
-        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords()]);
+        await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadAuditEvents()]);
       } else if (window.location.pathname !== '/login') {
         replacePath('/login');
       }
@@ -315,7 +335,7 @@
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadAuditEvents()]);
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -337,7 +357,7 @@
       newPassword = '';
       authSession = await auth.session();
       syncAuthenticatedPath();
-      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords()]);
+      await Promise.all([loadConfiguration(), loadApplications(), loadWafRules(), loadDnsRecords(), loadAuditEvents()]);
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -780,8 +800,20 @@
                   <h2>{i18n.text('audit.title')}</h2>
                   <p>{i18n.text('audit.description')}</p>
                 </div>
+                <button class="icon-button" type="button" title={i18n.text('services.refresh')} onclick={() => void loadAuditEvents()}>
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
               </div>
-              {#if dashboard.auditEvents.length === 0}
+              {#if auditLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('audit.loading')}></div>
+                </div>
+              {:else if auditError}
+                <div class="empty-state">
+                  <i class="bi bi-exclamation-triangle"></i>
+                  <h3>{auditError}</h3>
+                </div>
+              {:else if dashboard.auditEvents.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-clock-history"></i>
                   <h3>{i18n.text('audit.emptyTitle')}</h3>
@@ -796,15 +828,17 @@
                         <th scope="col">{i18n.text('audit.actor')}</th>
                         <th scope="col">{i18n.text('audit.action')}</th>
                         <th scope="col">{i18n.text('audit.resource')}</th>
+                        <th scope="col">{i18n.text('audit.result')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {#each dashboard.auditEvents as event (event.id)}
                         <tr>
-                          <td>{event.createdAt}</td>
+                          <td>{event.occurredAt}</td>
                           <td>{event.actor}</td>
                           <td>{event.action}</td>
-                          <td>{event.resource}</td>
+                          <td>{event.resourceType}:{event.resourceId}</td>
+                          <td>{event.result}</td>
                         </tr>
                       {/each}
                     </tbody>
