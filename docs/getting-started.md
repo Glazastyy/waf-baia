@@ -22,6 +22,14 @@ This creates:
 - `config/secrets.env`, ignored by Git, with generated local passwords and API keys
 - `config/platform.yaml`, ignored by Git, copied from `config/platform.example.yaml`
 
+For a guided first configuration, use:
+
+```sh
+bun run configure
+```
+
+The wizard asks for hostnames, ACME email, provider choices and optional Cloudflare token. Internal passwords and API keys are generated securely.
+
 Validate the Compose model:
 
 ```sh
@@ -61,7 +69,7 @@ Open `config/secrets.env` and review:
 
 The intended operator model is:
 
-1. Use `bun run setup` once to create local files.
+1. Use `bun run setup` once to create default local files, or `bun run configure` for a guided setup.
 2. Manage day-to-day settings through the Core and panel.
 3. Let the Core validate and persist panel changes back to `config/platform.yaml`.
 4. If `config/platform.yaml` is edited manually, reload it through the Core so the panel reflects the file.

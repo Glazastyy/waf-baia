@@ -4,6 +4,12 @@ This guide covers common operator tasks once the local stack has been initialize
 
 ## Start And Stop
 
+Create or refresh guided local configuration:
+
+```sh
+bun run configure
+```
+
 Start:
 
 ```sh

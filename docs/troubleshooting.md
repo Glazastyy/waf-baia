@@ -12,6 +12,14 @@ ls config/platform.yaml config/secrets.env
 
 If a file already exists, setup reports it as preserved.
 
+For guided regeneration, use:
+
+```sh
+bun run configure
+```
+
+The wizard asks before overwriting existing runtime files.
+
 ## Compose Cannot Find Environment Variables
 
 Run setup first:

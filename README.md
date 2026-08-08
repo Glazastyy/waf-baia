@@ -30,6 +30,12 @@ bun run setup
 
 Review `config/platform.yaml` and `config/secrets.env` when you want to change public hostnames, enable Cloudflare, or set a real ACME email. The setup command preserves existing local files and generates strong local secrets for the bundled services.
 
+For an interactive guided configuration, run:
+
+```sh
+bun run configure
+```
+
 Validate the Compose stack:
 
 ```sh

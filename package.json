@@ -6,6 +6,7 @@
   ],
   "scripts": {
     "setup": "bun run tools/setup.ts",
+    "configure": "bun run tools/configure.ts",
     "compose:config": "docker compose --env-file config/secrets.env -f deploy/compose/docker-compose.yml config",
     "compose:up": "docker compose --env-file config/secrets.env -f deploy/compose/docker-compose.yml up --build",
     "compose:down": "docker compose --env-file config/secrets.env -f deploy/compose/docker-compose.yml down",

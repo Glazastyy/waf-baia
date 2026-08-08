@@ -26,6 +26,14 @@ bun run setup
 
 The setup command preserves existing local files.
 
+Generate local files interactively:
+
+```sh
+bun run configure
+```
+
+The configure wizard asks for public URL, admin hostname, ACME email, PowerDNS, Cloudflare, CrowdSec, wildcard certificates and DNS-01 provider. It writes `config/platform.yaml` and `config/secrets.env`; internal passwords and service API keys are generated with cryptographic randomness.
+
 ## Platform Section
 
 `platform.publicUrl` is the public URL used for links, login flows and generated admin references.
