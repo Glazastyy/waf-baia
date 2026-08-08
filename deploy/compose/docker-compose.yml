@@ -34,7 +34,7 @@ services:
       context: ../..
       dockerfile: apps/core/Dockerfile
     env_file:
-      - ../../config/secrets.env.example
+      - ../../config/secrets.env
     environment:
       BAIA_CONFIG_PATH: /config/platform.yaml
       DATABASE_URL: postgres://baia:${POSTGRES_PASSWORD}@postgres:5432/baia
@@ -45,7 +45,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ../../config/platform.example.yaml:/config/platform.yaml:ro
+      - ../../config/platform.yaml:/config/platform.yaml:ro
     networks:
       - baia
 
@@ -63,7 +63,7 @@ services:
       context: ../../services/caddy
       dockerfile: Dockerfile
     env_file:
-      - ../../config/secrets.env.example
+      - ../../config/secrets.env
     ports:
       - "80:80"
       - "443:443"

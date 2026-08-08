@@ -5,6 +5,10 @@
     "apps/web"
   ],
   "scripts": {
+    "setup": "bun run tools/setup.ts",
+    "compose:config": "docker compose --env-file config/secrets.env -f deploy/compose/docker-compose.yml config",
+    "compose:up": "docker compose --env-file config/secrets.env -f deploy/compose/docker-compose.yml up --build",
+    "compose:down": "docker compose --env-file config/secrets.env -f deploy/compose/docker-compose.yml down",
     "test": "bun test",
     "web:dev": "bun run --cwd apps/web dev",
     "web:build": "bun run --cwd apps/web build",
