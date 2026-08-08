@@ -33,6 +33,7 @@ struct AppState {
     users: Arc<Mutex<HashMap<String, UserAccount>>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     throttles: Arc<Mutex<HashMap<String, LoginThrottle>>>,
+    applications: Arc<Mutex<Vec<ApplicationRecord>>>,
     secure_cookies: bool,
     platform_config: PlatformConfig,
 }
@@ -58,6 +59,23 @@ struct LoginThrottle {
     locked_until: Option<Instant>,
 }
 
+#[derive(Clone)]
+struct ApplicationRecord {
+    id: String,
+    name: String,
+    hostname: String,
+    enabled: bool,
+    upstreams: Vec<UpstreamRecord>,
+}
+
+#[derive(Clone)]
+struct UpstreamRecord {
+    id: String,
+    dial: String,
+    weight: u32,
+    enabled: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginRequest {
     username: String,
@@ -69,6 +87,21 @@ struct LoginRequest {
 struct ChangePasswordRequest {
     current_password: String,
     new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateApplicationRequest {
+    name: String,
+    hostname: String,
+    upstreams: Vec<CreateUpstreamRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateUpstreamRequest {
+    dial: String,
+    weight: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +167,31 @@ struct SessionUser {
     password_change_required: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplicationListResponse {
+    items: Vec<ApplicationResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplicationResponse {
+    id: String,
+    name: String,
+    hostname: String,
+    enabled: bool,
+    upstreams: Vec<UpstreamResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamResponse {
+    id: String,
+    dial: String,
+    weight: u32,
+    enabled: bool,
+}
+
 impl ServerConfig {
     pub fn from_env() -> Self {
         let bind_addr = std::env::var("BAIA_CORE_BIND")
@@ -181,6 +239,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         users: Arc::new(Mutex::new(users)),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         throttles: Arc::new(Mutex::new(HashMap::new())),
+        applications: Arc::new(Mutex::new(Vec::new())),
         secure_cookies: config.secure_cookies,
         platform_config: config.platform_config,
     };
@@ -204,7 +263,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         )
         .route(
             "/api/applications",
-            get(authenticated_json).post(authenticated_no_content),
+            get(applications_index).post(applications_create),
         )
         .route(
             "/api/waf/rules",
@@ -395,6 +454,60 @@ async fn configuration_patch(State(state): State<AppState>, headers: HeaderMap) 
     authenticated_mutation(state, headers)
 }
 
+async fn applications_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if require_session(&state, &headers).is_none() {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    }
+
+    let applications = state
+        .applications
+        .lock()
+        .expect("applications lock must not be poisoned")
+        .iter()
+        .cloned()
+        .map(application_response)
+        .collect();
+
+    Json(ApplicationListResponse {
+        items: applications,
+    })
+    .into_response()
+}
+
+async fn applications_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApplicationRequest>,
+) -> Response {
+    let Some(session) = require_session(&state, &headers) else {
+        return error(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+
+    if !valid_csrf(&headers, &session) {
+        return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
+    }
+
+    let Ok(application) = application_from_request(request) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "Application input is invalid");
+    };
+
+    let mut applications = state
+        .applications
+        .lock()
+        .expect("applications lock must not be poisoned");
+
+    if applications
+        .iter()
+        .any(|existing| existing.hostname.eq_ignore_ascii_case(&application.hostname))
+    {
+        return error(StatusCode::CONFLICT, "Application hostname already exists");
+    }
+
+    applications.push(application.clone());
+
+    (StatusCode::CREATED, Json(application_response(application))).into_response()
+}
+
 async fn authenticated_no_content(State(state): State<AppState>, headers: HeaderMap) -> Response {
     authenticated_mutation(state, headers)
 }
@@ -449,6 +562,109 @@ fn powerdns_mode(mode: &PowerDnsMode) -> &'static str {
         PowerDnsMode::External => "external",
     }
 }
+
+fn application_from_request(
+    request: CreateApplicationRequest,
+) -> Result<ApplicationRecord, ApplicationValidationError> {
+    let name = normalized_name(&request.name).ok_or(ApplicationValidationError)?;
+    let hostname = normalized_hostname(&request.hostname).ok_or(ApplicationValidationError)?;
+
+    if request.upstreams.is_empty() || request.upstreams.len() > 16 {
+        return Err(ApplicationValidationError);
+    }
+
+    let upstreams = request
+        .upstreams
+        .into_iter()
+        .map(upstream_from_request)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ApplicationRecord {
+        id: random_token(24),
+        name,
+        hostname,
+        enabled: true,
+        upstreams,
+    })
+}
+
+fn upstream_from_request(
+    request: CreateUpstreamRequest,
+) -> Result<UpstreamRecord, ApplicationValidationError> {
+    let dial = normalized_dial(&request.dial).ok_or(ApplicationValidationError)?;
+    let weight = request.weight.unwrap_or(1);
+
+    if weight == 0 || weight > 1000 {
+        return Err(ApplicationValidationError);
+    }
+
+    Ok(UpstreamRecord {
+        id: random_token(24),
+        dial,
+        weight,
+        enabled: true,
+    })
+}
+
+fn application_response(application: ApplicationRecord) -> ApplicationResponse {
+    ApplicationResponse {
+        id: application.id,
+        name: application.name,
+        hostname: application.hostname,
+        enabled: application.enabled,
+        upstreams: application
+            .upstreams
+            .into_iter()
+            .map(|upstream| UpstreamResponse {
+                id: upstream.id,
+                dial: upstream.dial,
+                weight: upstream.weight,
+                enabled: upstream.enabled,
+            })
+            .collect(),
+    }
+}
+
+fn normalized_name(value: &str) -> Option<String> {
+    let normalized = value.trim();
+
+    if normalized.is_empty() || normalized.len() > 120 {
+        return None;
+    }
+
+    Some(normalized.to_string())
+}
+
+fn normalized_hostname(value: &str) -> Option<String> {
+    let hostname = value.trim().trim_end_matches('.').to_ascii_lowercase();
+
+    if hostname.len() > 253 || hostname.split('.').count() < 2 {
+        return None;
+    }
+
+    let valid = hostname.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    });
+
+    valid.then_some(hostname)
+}
+
+fn normalized_dial(value: &str) -> Option<String> {
+    let dial = value.trim();
+
+    if dial.is_empty() || dial.len() > 255 || dial.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return None;
+    }
+
+    Some(dial.to_string())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ApplicationValidationError;
 
 fn require_session(state: &AppState, headers: &HeaderMap) -> Option<Session> {
     let session_id = session_cookie_value(headers)?;

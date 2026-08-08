@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { createApplicationsClient } from './lib/applications';
   import { createAuthClient, type AuthSession } from './lib/auth';
   import {
     componentStatusesFromConfiguration,
@@ -22,6 +23,7 @@
   persistLocale(initialLocale);
   const auth = createAuthClient();
   const configClient = createConfigClient();
+  const applicationsClient = createApplicationsClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -34,6 +36,12 @@
   let currentPassword = $state('');
   let newPassword = $state('');
   let changePasswordError = $state('');
+  let applicationName = $state('');
+  let applicationHostname = $state('');
+  let applicationUpstreamDial = $state('');
+  let applicationsLoading = $state(false);
+  let applicationsSubmitting = $state(false);
+  let applicationsError = $state('');
   let currentRoute = $state<AdminRoute>(resolveAdminRoute(window.location.pathname));
   let dashboard = $state<DashboardState>(createEmptyDashboard());
   let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
@@ -131,13 +139,53 @@
     }
   }
 
+  async function loadApplications(): Promise<void> {
+    applicationsLoading = true;
+    applicationsError = '';
+    try {
+      dashboard.applications = await applicationsClient.list();
+    } catch {
+      dashboard.applications = [];
+      applicationsError = i18n.text('applications.loadError');
+    } finally {
+      applicationsLoading = false;
+    }
+  }
+
+  async function submitApplication(): Promise<void> {
+    const csrfToken = authSession.csrfToken;
+
+    if (!csrfToken) {
+      applicationsError = i18n.text('applications.authRequired');
+      return;
+    }
+
+    applicationsSubmitting = true;
+    applicationsError = '';
+    try {
+      const application = await applicationsClient.create(csrfToken, {
+        name: applicationName,
+        hostname: applicationHostname,
+        upstreamDial: applicationUpstreamDial
+      });
+      dashboard.applications = [...dashboard.applications, application];
+      applicationName = '';
+      applicationHostname = '';
+      applicationUpstreamDial = '';
+    } catch {
+      applicationsError = i18n.text('applications.saveError');
+    } finally {
+      applicationsSubmitting = false;
+    }
+  }
+
   async function refreshSession(): Promise<void> {
     authLoading = true;
     try {
       authSession = await auth.session();
       if (authSession.authenticated) {
         syncAuthenticatedPath();
-        await loadConfiguration();
+        await Promise.all([loadConfiguration(), loadApplications()]);
       } else if (window.location.pathname !== '/login') {
         replacePath('/login');
       }
@@ -156,7 +204,7 @@
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
       syncAuthenticatedPath();
-      await loadConfiguration();
+      await Promise.all([loadConfiguration(), loadApplications()]);
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -178,7 +226,7 @@
       newPassword = '';
       authSession = await auth.session();
       syncAuthenticatedPath();
-      await loadConfiguration();
+      await Promise.all([loadConfiguration(), loadApplications()]);
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -384,12 +432,37 @@
                   <h2>{i18n.text('applications.title')}</h2>
                   <p>{i18n.text('applications.description')}</p>
                 </div>
-                <button class="btn btn-primary btn-sm" type="button">
-                  <i class="bi bi-plus-lg me-1"></i>
-                  {i18n.text('applications.add')}
-                </button>
               </div>
-              {#if dashboard.applications.length === 0}
+
+              <form class="application-form" onsubmit={(event) => { event.preventDefault(); void submitApplication(); }}>
+                {#if applicationsError}
+                  <div class="alert alert-danger mb-0" role="alert">{applicationsError}</div>
+                {/if}
+                <div>
+                  <label class="form-label" for="application-name">{i18n.text('applications.name')}</label>
+                  <input id="application-name" class="form-control" bind:value={applicationName} required maxlength="120" />
+                </div>
+                <div>
+                  <label class="form-label" for="application-hostname">{i18n.text('applications.hostname')}</label>
+                  <input id="application-hostname" class="form-control" bind:value={applicationHostname} required maxlength="253" />
+                </div>
+                <div>
+                  <label class="form-label" for="application-upstream">{i18n.text('applications.upstream')}</label>
+                  <input id="application-upstream" class="form-control" bind:value={applicationUpstreamDial} required maxlength="255" />
+                </div>
+                <div class="application-form-action">
+                  <button class="btn btn-primary" type="submit" disabled={applicationsSubmitting}>
+                    <i class="bi bi-plus-lg me-1"></i>
+                    {applicationsSubmitting ? i18n.text('applications.saving') : i18n.text('applications.add')}
+                  </button>
+                </div>
+              </form>
+
+              {#if applicationsLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('applications.loading')}></div>
+                </div>
+              {:else if dashboard.applications.length === 0}
                 <div class="empty-state">
                   <i class="bi bi-window-stack"></i>
                   <h3>{i18n.text('applications.emptyTitle')}</h3>
@@ -401,7 +474,7 @@
                     <thead>
                       <tr>
                         <th scope="col">{i18n.text('applications.name')}</th>
-                        <th scope="col">{i18n.text('applications.domain')}</th>
+                        <th scope="col">{i18n.text('applications.hostname')}</th>
                         <th scope="col">{i18n.text('applications.upstream')}</th>
                         <th scope="col">{i18n.text('applications.status')}</th>
                       </tr>
@@ -410,8 +483,8 @@
                       {#each dashboard.applications as application (application.id)}
                         <tr>
                           <th scope="row">{application.name}</th>
-                          <td>{application.domain}</td>
-                          <td>{application.upstream}</td>
+                          <td>{application.hostname}</td>
+                          <td>{application.upstreams[0]?.dial ?? ''}</td>
                           <td>{application.enabled ? i18n.text('status.enabled') : i18n.text('status.disabled')}</td>
                         </tr>
                       {/each}
@@ -726,6 +799,24 @@
     margin: .25rem 0 0;
   }
 
+  .application-form {
+    padding: 1rem;
+    display: grid;
+    grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.2fr) minmax(12rem, 1.2fr) auto;
+    gap: 1rem;
+    align-items: end;
+    border-bottom: 1px solid #e6ebf2;
+  }
+
+  .application-form .alert {
+    grid-column: 1 / -1;
+  }
+
+  .application-form-action {
+    display: flex;
+    justify-content: flex-end;
+  }
+
   .empty-state {
     min-height: 18rem;
     display: grid;
@@ -789,6 +880,14 @@
 
     .metric-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .application-form {
+      grid-template-columns: 1fr;
+    }
+
+    .application-form-action {
+      justify-content: flex-start;
     }
   }
 

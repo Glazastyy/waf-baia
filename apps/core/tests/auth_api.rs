@@ -210,6 +210,107 @@ async fn authenticated_configuration_returns_loaded_platform_configuration() {
     assert_eq!(body["integrations"]["crowdsec"]["apiKeyEnv"], Value::Null);
 }
 
+#[tokio::test]
+async fn applications_can_be_created_and_listed_without_sample_data() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/applications")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert_eq!(response_json(empty).await["items"], serde_json::json!([]));
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/applications")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"name":"Portal","hostname":"portal.example.com","upstreams":[{"dial":"10.0.0.20:8080"}]}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = response_json(created).await;
+    assert_eq!(created_body["name"], "Portal");
+    assert_eq!(created_body["hostname"], "portal.example.com");
+    assert_eq!(created_body["enabled"], true);
+    assert_eq!(created_body["upstreams"][0]["dial"], "10.0.0.20:8080");
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/applications")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    let listed_body = response_json(listed).await;
+    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(listed_body["items"][0]["hostname"], "portal.example.com");
+}
+
+#[tokio::test]
+async fn applications_reject_invalid_input_without_mutating_state() {
+    let app = build_router(ServerConfig::for_tests("correct-password"));
+    let authenticated = login_session(&app).await;
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/applications")
+                .header("content-type", "application/json")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .header("x-csrf-token", authenticated.csrf_token.as_str())
+                .body(Body::from(
+                    r#"{"name":"","hostname":"not a hostname","upstreams":[{"dial":""}]}"#,
+                ))
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/applications")
+                .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(response_json(listed).await["items"], serde_json::json!([]));
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -232,4 +333,40 @@ fn cookie_pair(set_cookie: &str) -> String {
         .next()
         .expect("cookie must contain name-value")
         .to_string()
+}
+
+struct AuthenticatedSession {
+    session_cookie: String,
+    csrf_token: String,
+}
+
+async fn login_session(app: &axum::Router) -> AuthenticatedSession {
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/auth/login",
+            r#"{"username":"admin","password":"correct-password"}"#,
+        ))
+        .await
+        .expect("request must complete");
+    let session_cookie = login
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .find_map(|value| {
+            let raw = value.to_str().expect("cookie must be valid ascii");
+            raw.starts_with("baia_session=").then(|| raw.to_string())
+        })
+        .expect("session cookie must be set");
+    let body = response_json(login).await;
+    let csrf_token = body["csrfToken"]
+        .as_str()
+        .expect("csrf token must exist")
+        .to_string();
+
+    AuthenticatedSession {
+        session_cookie,
+        csrf_token,
+    }
 }

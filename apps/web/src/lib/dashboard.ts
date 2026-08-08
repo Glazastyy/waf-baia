@@ -1,10 +1,6 @@
-export type Application = {
-  id: string;
-  name: string;
-  domain: string;
-  upstream: string;
-  enabled: boolean;
-};
+import type { Application } from './applications';
+
+export type { Application } from './applications';
 
 export type WafRule = {
   id: string;
