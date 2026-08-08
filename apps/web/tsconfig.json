@@ -9,5 +9,6 @@
     "target": "ES2022",
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"]
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"],
+  "exclude": ["src/**/*.test.ts"]
 }

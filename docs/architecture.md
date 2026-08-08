@@ -34,7 +34,7 @@ Protected Applications
 
 Core: API administrativa, RBAC, bootstrap do primeiro admin, validação de configuração, persistência, auditoria, geração de JSON para Caddy, integrações DNS, ACME, CrowdSec, notificações e jobs.
 
-Web: painel administrativo responsivo em Svelte 5 com Bootstrap real.
+Web: painel administrativo responsivo em Svelte 5 com Bootstrap real e i18n para multiplos idiomas.
 
 Caddy: terminação TLS, reverse proxy, roteamento, headers de segurança, rate limiting, bloqueios e integração com CrowdSec.
 
@@ -56,7 +56,7 @@ O cliente acessa um domínio protegido. O Caddy recebe a requisição, normaliza
 
 Rust: Axum para HTTP, Tokio para runtime assíncrono, SQLx para PostgreSQL com queries verificáveis, Argon2 para senhas, Serde para configuração/JSON, JsonSchema para validação, Redis crate para cache e locks, Tracing para logs estruturados.
 
-Svelte 5: Vite, TypeScript, Svelte Check e Bootstrap 5. O painel deve usar componentes oficiais do Bootstrap em vez de recriar padrões visuais.
+Svelte 5: Vite, TypeScript, Svelte Check, Bootstrap 5 e catalogo i18n tipado. O painel deve usar componentes oficiais do Bootstrap em vez de recriar padrões visuais.
 
 Infra: Docker Compose para desenvolvimento, PostgreSQL, Redis, Caddy, CrowdSec e PowerDNS.
 
