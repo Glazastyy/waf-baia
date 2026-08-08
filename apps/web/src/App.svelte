@@ -1,58 +1,27 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createAuthClient, type AuthSession } from './lib/auth';
-  import { localize, resolveLocale, supportedLocales, type Locale, type MessageKey } from './lib/i18n';
-
-  type ServiceStatus = 'healthy' | 'degraded' | 'disabled';
-
-  type Service = {
-    name: string;
-    roleKey: MessageKey;
-    status: ServiceStatus;
-    detailKey: MessageKey;
-  };
-
-  type Rule = {
-    priority: number;
-    nameKey: MessageKey;
-    scopeKey: MessageKey;
-    actionKey: MessageKey;
-    enabled: boolean;
-  };
-
-  type Certificate = {
-    domain: string;
-    issuer: string;
-    statusKey: MessageKey;
-    renewalKey: MessageKey;
-  };
-
-  type PlannedDnsRecord = {
-    type: string;
-    name: string;
-    value: string;
-    modeKey: MessageKey;
-  };
-
-  type KnownCa = {
-    name: string;
-    caaDomain: string;
-  };
-
-  type ApplyMode = 'hotReload' | 'restartRequired' | 'externalApi' | 'noRuntimeApply';
-
-  type ManagedComponent = {
-    name: string;
-    scope: string;
-    applyMode: ApplyMode;
-    coreManaged: boolean;
-    capabilities: string[];
-  };
+  import {
+    componentStatusesFromConfiguration,
+    createConfigClient,
+    type ComponentConfigurationStatus,
+    type ComponentStatus
+  } from './lib/config';
+  import { createEmptyDashboard, dashboardSummary, type DashboardState } from './lib/dashboard';
+  import { localize, resolveLocale, supportedLocales, type Locale } from './lib/i18n';
+  import {
+    adminNavigation,
+    pathForRoute,
+    resolveAdminRoute,
+    shouldRedirectAuthenticatedUser,
+    type AdminRoute
+  } from './lib/routes';
 
   const languageStorageKey = 'baia.locale';
   const initialLocale = resolveLocale(localStorage.getItem(languageStorageKey) ?? navigator.language);
   persistLocale(initialLocale);
   const auth = createAuthClient();
+  const configClient = createConfigClient();
 
   let locale = $state<Locale>(initialLocale);
   let i18n = $derived(localize(locale));
@@ -65,96 +34,25 @@
   let currentPassword = $state('');
   let newPassword = $state('');
   let changePasswordError = $state('');
+  let currentRoute = $state<AdminRoute>(resolveAdminRoute(window.location.pathname));
+  let dashboard = $state<DashboardState>(createEmptyDashboard());
+  let componentStatuses = $state<ComponentConfigurationStatus[]>([]);
+  let configurationLoading = $state(false);
+  let configurationError = $state('');
+  let summary = $derived(dashboardSummary(dashboard));
 
   onMount(() => {
+    const handlePopState = () => {
+      currentRoute = resolveAdminRoute(window.location.pathname);
+    };
+
+    window.addEventListener('popstate', handlePopState);
     void refreshSession();
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
   });
-
-  let services = $state<Service[]>([
-    { name: 'Core API', roleKey: 'service.core.role', status: 'healthy', detailKey: 'service.core.detail' },
-    { name: 'Caddy', roleKey: 'service.caddy.role', status: 'healthy', detailKey: 'service.caddy.detail' },
-    { name: 'PostgreSQL', roleKey: 'service.postgres.role', status: 'healthy', detailKey: 'service.postgres.detail' },
-    { name: 'Redis', roleKey: 'service.redis.role', status: 'healthy', detailKey: 'service.redis.detail' },
-    { name: 'CrowdSec', roleKey: 'service.crowdsec.role', status: 'disabled', detailKey: 'service.crowdsec.detail' },
-    { name: 'PowerDNS', roleKey: 'service.powerdns.role', status: 'degraded', detailKey: 'service.powerdns.detail' }
-  ]);
-
-  let rules = $state<Rule[]>([
-    {
-      priority: 10,
-      nameKey: 'rule.blockScanners.name',
-      scopeKey: 'rule.blockScanners.scope',
-      actionKey: 'action.block',
-      enabled: true
-    },
-    {
-      priority: 20,
-      nameKey: 'rule.apiThrottle.name',
-      scopeKey: 'rule.apiThrottle.scope',
-      actionKey: 'action.rateLimit',
-      enabled: true
-    },
-    {
-      priority: 30,
-      nameKey: 'rule.riskChallenge.name',
-      scopeKey: 'rule.riskChallenge.scope',
-      actionKey: 'action.challenge',
-      enabled: false
-    }
-  ]);
-
-  let certificates = $state<Certificate[]>([
-    { domain: 'admin.waf.localhost', issuer: 'ACME HTTP-01', statusKey: 'certificate.admin.status', renewalKey: 'certificate.admin.renewal' },
-    {
-      domain: '*.example.test',
-      issuer: 'ACME DNS-01',
-      statusKey: 'certificate.wildcard.status',
-      renewalKey: 'certificate.wildcard.renewal'
-    }
-  ]);
-
-  let plannedDnsRecords = $state<PlannedDnsRecord[]>([
-    { type: 'A', name: 'app.example.test', value: '203.0.113.10', modeKey: 'cloudflare.proxyOff' },
-    { type: 'AAAA', name: 'app.example.test', value: '2001:db8::a', modeKey: 'cloudflare.proxyOff' },
-    { type: 'CAA', name: 'example.test', value: '0 issue "pki.goog"', modeKey: 'cloudflare.proxyOff' }
-  ]);
-
-  let knownCas = $state<KnownCa[]>([
-    { name: 'Let’s Encrypt', caaDomain: 'letsencrypt.org' },
-    { name: 'Google Trust Services', caaDomain: 'pki.goog' },
-    { name: 'Sectigo / ZeroSSL', caaDomain: 'sectigo.com' },
-    { name: 'DigiCert', caaDomain: 'digicert.com' },
-    { name: 'GlobalSign', caaDomain: 'globalsign.com' },
-    { name: 'SSL.com', caaDomain: 'ssl.com' },
-    { name: 'Buypass', caaDomain: 'buypass.com' }
-  ]);
-
-  let managedComponents = $state<ManagedComponent[]>([
-    { name: 'Core', scope: 'Configuration, RBAC, audit, jobs', applyMode: 'hotReload', coreManaged: true, capabilities: ['API', 'RBAC', 'Audit'] },
-    { name: 'Caddy', scope: 'Reverse proxy, TLS, WAF', applyMode: 'hotReload', coreManaged: true, capabilities: ['Admin API', 'Routes', 'TLS'] },
-    { name: 'PowerDNS', scope: 'Authoritative DNS', applyMode: 'externalApi', coreManaged: true, capabilities: ['Zones', 'Records', 'DNSSEC'] },
-    { name: 'Cloudflare', scope: 'External DNS and proxy', applyMode: 'externalApi', coreManaged: false, capabilities: ['A/AAAA', 'CAA', 'Proxy'] },
-    { name: 'CrowdSec', scope: 'Decisions and remediation', applyMode: 'externalApi', coreManaged: true, capabilities: ['Decisions', 'Bouncers', 'AppSec'] },
-    { name: 'PostgreSQL', scope: 'Persistent state', applyMode: 'restartRequired', coreManaged: true, capabilities: ['Migrations', 'Audit storage'] },
-    { name: 'Redis', scope: 'Sessions, locks, cache', applyMode: 'restartRequired', coreManaged: true, capabilities: ['Locks', 'Sessions', 'Rate state'] },
-    { name: 'ACME', scope: 'Certificates and renewals', applyMode: 'hotReload', coreManaged: true, capabilities: ['HTTP-01', 'DNS-01', 'CAA'] }
-  ]);
-
-  function statusClass(status: ServiceStatus): string {
-    if (status === 'healthy') {
-      return 'text-bg-success';
-    }
-
-    if (status === 'degraded') {
-      return 'text-bg-warning';
-    }
-
-    return 'text-bg-secondary';
-  }
-
-  function toggleRule(rule: Rule): void {
-    rule.enabled = !rule.enabled;
-  }
 
   function changeLocale(value: string): void {
     const nextLocale = resolveLocale(value);
@@ -162,33 +60,90 @@
     persistLocale(nextLocale);
   }
 
-  function applyModeLabel(mode: ApplyMode): string {
-    if (mode === 'hotReload') {
-      return i18n.text('components.hotReload');
-    }
-
-    if (mode === 'restartRequired') {
-      return i18n.text('components.restartRequired');
-    }
-
-    if (mode === 'externalApi') {
-      return i18n.text('components.externalApi');
-    }
-
-    return i18n.text('components.noRuntimeApply');
-  }
-
   function persistLocale(nextLocale: Locale): void {
     document.documentElement.lang = nextLocale;
     localStorage.setItem(languageStorageKey, nextLocale);
+  }
+
+  function navigate(route: AdminRoute): void {
+    const path = pathForRoute(route);
+
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+
+    currentRoute = route;
+  }
+
+  function replacePath(path: string): void {
+    if (window.location.pathname !== path) {
+      window.history.replaceState({}, '', path);
+    }
+
+    currentRoute = resolveAdminRoute(path);
+  }
+
+  function syncAuthenticatedPath(): void {
+    const redirectPath = shouldRedirectAuthenticatedUser(window.location.pathname);
+
+    if (redirectPath) {
+      replacePath(redirectPath);
+    } else {
+      currentRoute = resolveAdminRoute(window.location.pathname);
+    }
+  }
+
+  function componentStatusLabel(status: ComponentStatus): string {
+    if (status === 'configured') {
+      return i18n.text('components.configured');
+    }
+
+    if (status === 'disabled') {
+      return i18n.text('status.disabled');
+    }
+
+    return i18n.text('components.needsConfiguration');
+  }
+
+  function componentStatusClass(status: ComponentStatus): string {
+    if (status === 'configured') {
+      return 'text-bg-success';
+    }
+
+    if (status === 'disabled') {
+      return 'text-bg-secondary';
+    }
+
+    return 'text-bg-warning';
+  }
+
+  async function loadConfiguration(): Promise<void> {
+    configurationLoading = true;
+    configurationError = '';
+    try {
+      const configuration = await configClient.load();
+      componentStatuses = componentStatusesFromConfiguration(configuration);
+    } catch {
+      componentStatuses = [];
+      configurationError = i18n.text('components.loadError');
+    } finally {
+      configurationLoading = false;
+    }
   }
 
   async function refreshSession(): Promise<void> {
     authLoading = true;
     try {
       authSession = await auth.session();
+      if (authSession.authenticated) {
+        syncAuthenticatedPath();
+        await loadConfiguration();
+      } else if (window.location.pathname !== '/login') {
+        replacePath('/login');
+      }
     } catch {
       authSession = { authenticated: false, user: null, csrfToken: null };
+      replacePath('/login');
     } finally {
       authLoading = false;
     }
@@ -200,6 +155,8 @@
     try {
       authSession = await auth.login(loginUsername, loginPassword);
       loginPassword = '';
+      syncAuthenticatedPath();
+      await loadConfiguration();
     } catch {
       loginError = i18n.text('auth.loginError');
     } finally {
@@ -209,6 +166,7 @@
 
   async function submitLogout(): Promise<void> {
     authSession = await auth.logout();
+    replacePath('/login');
   }
 
   async function submitPasswordChange(): Promise<void> {
@@ -219,6 +177,8 @@
       currentPassword = '';
       newPassword = '';
       authSession = await auth.session();
+      syncAuthenticatedPath();
+      await loadConfiguration();
     } catch {
       changePasswordError = i18n.text('auth.changePasswordError');
     } finally {
@@ -231,7 +191,7 @@
   {#if authLoading}
     <section class="auth-shell">
       <div class="auth-panel">
-        <div class="d-flex align-items-center gap-2">
+        <div class="brand-lockup">
           <i class="bi bi-shield-lock fs-4"></i>
           <span class="fw-semibold">Baia WAF</span>
         </div>
@@ -241,7 +201,7 @@
   {:else if !authSession.authenticated}
     <section class="auth-shell">
       <form class="auth-panel" onsubmit={(event) => { event.preventDefault(); void submitLogin(); }}>
-        <div class="d-flex align-items-center gap-2 mb-4">
+        <div class="brand-lockup mb-4">
           <i class="bi bi-shield-lock fs-4"></i>
           <div>
             <div class="fw-semibold">Baia WAF</div>
@@ -267,7 +227,7 @@
   {:else if authSession.user?.passwordChangeRequired}
     <section class="auth-shell">
       <form class="auth-panel" onsubmit={(event) => { event.preventDefault(); void submitPasswordChange(); }}>
-        <div class="d-flex align-items-center gap-2 mb-4">
+        <div class="brand-lockup mb-4">
           <i class="bi bi-key fs-4"></i>
           <div>
             <div class="fw-semibold">{i18n.text('auth.changePasswordTitle')}</div>
@@ -292,272 +252,294 @@
       </form>
     </section>
   {:else}
-  <nav class="navbar navbar-expand-lg bg-dark border-bottom border-secondary" data-bs-theme="dark">
-    <div class="container-fluid">
-      <a class="navbar-brand fw-semibold" href="/">
-        <i class="bi bi-shield-lock me-2"></i>
-        Baia WAF
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#admin-nav" aria-controls="admin-nav" aria-expanded="false" aria-label="Toggle navigation">
-        <span class="navbar-toggler-icon"></span>
-      </button>
-      <div class="collapse navbar-collapse" id="admin-nav">
-        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link active" aria-current="page" href="/">{i18n.text('nav.overview')}</a></li>
-          <li class="nav-item"><a class="nav-link" href="/applications">{i18n.text('nav.applications')}</a></li>
-          <li class="nav-item"><a class="nav-link" href="/rules">{i18n.text('nav.rules')}</a></li>
-          <li class="nav-item"><a class="nav-link" href="/dns">DNS</a></li>
-          <li class="nav-item"><a class="nav-link" href="/audit">{i18n.text('nav.audit')}</a></li>
-        </ul>
-        <div class="d-flex flex-column flex-lg-row gap-2">
-          <label class="visually-hidden" for="locale-select">{i18n.text('nav.language')}</label>
-          <select id="locale-select" class="form-select form-select-sm language-select" value={locale} aria-label={i18n.text('nav.language')} onchange={(event) => changeLocale(event.currentTarget.value)}>
-            {#each supportedLocales as supportedLocale (supportedLocale.code)}
-              <option value={supportedLocale.code}>{supportedLocale.label}</option>
-            {/each}
-          </select>
-          <button class="btn btn-outline-light btn-sm" type="button" title={i18n.text('nav.applyCaddy')}>
-            <i class="bi bi-arrow-repeat"></i>
-          </button>
-          <button class="btn btn-warning btn-sm" type="button">
-            <i class="bi bi-exclamation-triangle me-1"></i>
-            {i18n.text('nav.pendingActions', { count: 2 })}
-          </button>
-          <button class="btn btn-outline-light btn-sm" type="button" onclick={() => void submitLogout()}>
-            <i class="bi bi-box-arrow-right me-1"></i>
-            {i18n.text('auth.logout')}
-          </button>
-        </div>
-      </div>
-    </div>
-  </nav>
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <a class="admin-brand" href="/" onclick={(event) => { event.preventDefault(); navigate('overview'); }}>
+          <i class="bi bi-shield-lock"></i>
+          <span>Baia WAF</span>
+        </a>
+        <nav class="admin-nav" aria-label={i18n.text('nav.primary')}>
+          {#each adminNavigation as item (item.route)}
+            <a
+              class:active={currentRoute === item.route}
+              href={item.path}
+              aria-current={currentRoute === item.route ? 'page' : undefined}
+              onclick={(event) => { event.preventDefault(); navigate(item.route); }}
+            >
+              <i class={`bi ${item.icon}`}></i>
+              <span>{i18n.text(item.labelKey)}</span>
+            </a>
+          {/each}
+        </nav>
+      </aside>
 
-  <div class="container-fluid py-4">
-    <div class="row g-3 mb-4">
-      <div class="col-12 col-xl-3">
-        <div class="card shadow-sm h-100">
-          <div class="card-body">
-            <div class="d-flex align-items-center justify-content-between">
-              <h1 class="h5 mb-0">{i18n.text('summary.title')}</h1>
-              <span class="badge text-bg-success">{i18n.text('summary.status')}</span>
+      <div class="admin-main">
+        <header class="admin-topbar">
+          <div>
+            <p class="section-kicker mb-1">{i18n.text('app.kicker')}</p>
+            <h1>{i18n.text(`page.${currentRoute}.title`)}</h1>
+          </div>
+          <div class="admin-actions">
+            <label class="visually-hidden" for="locale-select">{i18n.text('nav.language')}</label>
+            <select id="locale-select" class="form-select form-select-sm language-select" value={locale} aria-label={i18n.text('nav.language')} onchange={(event) => changeLocale(event.currentTarget.value)}>
+              {#each supportedLocales as supportedLocale (supportedLocale.code)}
+                <option value={supportedLocale.code}>{supportedLocale.label}</option>
+              {/each}
+            </select>
+            <button class="icon-button" type="button" title={i18n.text('nav.applyCaddy')}>
+              <i class="bi bi-arrow-repeat"></i>
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick={() => void submitLogout()}>
+              <i class="bi bi-box-arrow-right me-1"></i>
+              {i18n.text('auth.logout')}
+            </button>
+          </div>
+        </header>
+
+        <section class="content-shell">
+          {#if currentRoute === 'overview'}
+            <div class="metric-grid">
+              <div class="metric-card">
+                <span>{i18n.text('metrics.applications')}</span>
+                <strong>{summary.applications}</strong>
+              </div>
+              <div class="metric-card">
+                <span>{i18n.text('metrics.activeRules')}</span>
+                <strong>{summary.activeRules}</strong>
+              </div>
+              <div class="metric-card">
+                <span>{i18n.text('metrics.certificates')}</span>
+                <strong>{summary.certificates}</strong>
+              </div>
+              <div class="metric-card">
+                <span>{i18n.text('metrics.auditEvents')}</span>
+                <strong>{summary.auditEvents}</strong>
+              </div>
             </div>
-            <p class="text-body-secondary mb-0 mt-2">{i18n.text('summary.description', { services: 6, rules: 3, certificates: 2 })}</p>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-4 col-xl-3">
-        <div class="card shadow-sm h-100">
-          <div class="card-body">
-            <div class="text-body-secondary small">{i18n.text('metrics.protectedHosts')}</div>
-            <div class="display-6">12</div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-4 col-xl-3">
-        <div class="card shadow-sm h-100">
-          <div class="card-body">
-            <div class="text-body-secondary small">{i18n.text('metrics.blockedRequests')}</div>
-            <div class="display-6">1,284</div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-4 col-xl-3">
-        <div class="card shadow-sm h-100">
-          <div class="card-body">
-            <div class="text-body-secondary small">{i18n.text('metrics.p95Latency')}</div>
-            <div class="display-6">82 ms</div>
-          </div>
-        </div>
-      </div>
-    </div>
 
-    <div class="row g-4">
-      <section class="col-12 col-xxl-7">
-        <div class="card shadow-sm">
-          <div class="card-header d-flex align-items-center justify-content-between">
-            <span class="fw-semibold">{i18n.text('services.title')}</span>
-            <button class="btn btn-outline-secondary btn-sm" type="button" title={i18n.text('services.refresh')}>
-              <i class="bi bi-arrow-clockwise"></i>
-            </button>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-              <thead>
-                <tr>
-                  <th scope="col">{i18n.text('table.service')}</th>
-                  <th scope="col">{i18n.text('table.responsibility')}</th>
-                  <th scope="col">{i18n.text('table.status')}</th>
-                  <th scope="col">{i18n.text('table.detail')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each services as service (service.name)}
-                  <tr>
-                    <th scope="row">{service.name}</th>
-                    <td>{i18n.text(service.roleKey)}</td>
-                    <td><span class={`badge ${statusClass(service.status)}`}>{i18n.text(`status.${service.status}`)}</span></td>
-                    <td>{i18n.text(service.detailKey)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="col-12 col-xxl-5">
-        <div class="card shadow-sm">
-          <div class="card-header d-flex align-items-center justify-content-between">
-            <span class="fw-semibold">{i18n.text('rules.title')}</span>
-            <button class="btn btn-primary btn-sm" type="button">
-              <i class="bi bi-plus-lg me-1"></i>
-              {i18n.text('rules.new')}
-            </button>
-          </div>
-          <div class="list-group list-group-flush">
-            {#each rules as rule (rule.nameKey)}
-              <div class="list-group-item">
-                <div class="d-flex justify-content-between gap-3">
-                  <div>
-                    <div class="fw-semibold">{rule.priority}. {i18n.text(rule.nameKey)}</div>
-                    <div class="text-body-secondary small">{i18n.text(rule.scopeKey)}</div>
-                  </div>
-                  <div class="d-flex align-items-center gap-2">
-                    <span class="badge text-bg-info">{i18n.text(rule.actionKey)}</span>
-                    <div class="form-check form-switch mb-0">
-                      <input class="form-check-input" type="checkbox" checked={rule.enabled} aria-label={i18n.text('rules.toggle', { name: i18n.text(rule.nameKey) })} onchange={() => toggleRule(rule)} />
-                    </div>
-                  </div>
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('overview.nextStepTitle')}</h2>
+                  <p>{i18n.text('overview.nextStepDescription')}</p>
                 </div>
+                <button class="btn btn-primary btn-sm" type="button" onclick={() => navigate('applications')}>
+                  <i class="bi bi-plus-lg me-1"></i>
+                  {i18n.text('applications.add')}
+                </button>
               </div>
-            {/each}
-          </div>
-        </div>
-      </section>
-
-      <section class="col-12">
-        <div class="card shadow-sm">
-          <div class="card-header d-flex align-items-center justify-content-between">
-            <span class="fw-semibold">{i18n.text('cloudflare.title')}</span>
-            <span class="badge text-bg-secondary">{i18n.text('cloudflare.proxyOff')}</span>
-          </div>
-          <div class="card-body">
-            <div class="alert alert-warning d-flex gap-2" role="alert">
-              <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
-              <div>
-                <div class="fw-semibold">{i18n.text('cloudflare.warningTitle')}</div>
-                <div>{i18n.text('cloudflare.doubleProxyWarning')}</div>
+              <div class="empty-state">
+                <i class="bi bi-window-plus"></i>
+                <h3>{i18n.text('overview.emptyTitle')}</h3>
+                <p>{i18n.text('overview.emptyDescription')}</p>
               </div>
             </div>
-            <div class="row g-4">
-              <div class="col-12 col-xl-7">
-                <div class="fw-semibold mb-2">{i18n.text('cloudflare.dnsRecords')}</div>
+
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('components.configurationTitle')}</h2>
+                  <p>{i18n.text('components.configurationDescription')}</p>
+                </div>
+                <button class="icon-button" type="button" title={i18n.text('services.refresh')} onclick={() => void loadConfiguration()}>
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </div>
+              {#if configurationLoading}
+                <div class="empty-state">
+                  <div class="spinner-border" role="status" aria-label={i18n.text('components.loading')}></div>
+                </div>
+              {:else if configurationError}
+                <div class="empty-state">
+                  <i class="bi bi-exclamation-triangle"></i>
+                  <h3>{configurationError}</h3>
+                </div>
+              {:else}
                 <div class="table-responsive">
-                  <table class="table table-sm align-middle mb-0">
+                  <table class="table align-middle mb-0">
                     <thead>
                       <tr>
-                        <th scope="col">Type</th>
-                        <th scope="col">{i18n.text('certificates.domain')}</th>
-                        <th scope="col">Value</th>
-                        <th scope="col">{i18n.text('cloudflare.mode')}</th>
+                        <th scope="col">{i18n.text('table.service')}</th>
+                        <th scope="col">{i18n.text('table.status')}</th>
+                        <th scope="col">{i18n.text('table.detail')}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {#each plannedDnsRecords as record (`${record.type}:${record.name}:${record.value}`)}
+                      {#each componentStatuses as component (component.id)}
                         <tr>
-                          <td><span class="badge text-bg-light border">{record.type}</span></td>
-                          <td>{record.name}</td>
-                          <td><code>{record.value}</code></td>
-                          <td>{i18n.text(record.modeKey)}</td>
+                          <th scope="row">{component.name}</th>
+                          <td><span class={`badge ${componentStatusClass(component.status)}`}>{componentStatusLabel(component.status)}</span></td>
+                          <td>{i18n.text(component.detailKey)}</td>
                         </tr>
                       {/each}
                     </tbody>
                   </table>
                 </div>
+              {/if}
+            </div>
+          {:else if currentRoute === 'applications'}
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('applications.title')}</h2>
+                  <p>{i18n.text('applications.description')}</p>
+                </div>
+                <button class="btn btn-primary btn-sm" type="button">
+                  <i class="bi bi-plus-lg me-1"></i>
+                  {i18n.text('applications.add')}
+                </button>
               </div>
-              <div class="col-12 col-xl-5">
-                <div class="fw-semibold mb-2">{i18n.text('cloudflare.caaTitle')}</div>
-                <p class="text-body-secondary small">{i18n.text('cloudflare.caaDescription')}</p>
-                <div class="d-flex flex-wrap gap-2">
-                  {#each knownCas as ca (ca.name)}
-                    <span class="badge text-bg-light border">{ca.name}: {ca.caaDomain}</span>
+              {#if dashboard.applications.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-window-stack"></i>
+                  <h3>{i18n.text('applications.emptyTitle')}</h3>
+                  <p>{i18n.text('applications.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="table-responsive">
+                  <table class="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">{i18n.text('applications.name')}</th>
+                        <th scope="col">{i18n.text('applications.domain')}</th>
+                        <th scope="col">{i18n.text('applications.upstream')}</th>
+                        <th scope="col">{i18n.text('applications.status')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dashboard.applications as application (application.id)}
+                        <tr>
+                          <th scope="row">{application.name}</th>
+                          <td>{application.domain}</td>
+                          <td>{application.upstream}</td>
+                          <td>{application.enabled ? i18n.text('status.enabled') : i18n.text('status.disabled')}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            </div>
+          {:else if currentRoute === 'rules'}
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('rules.title')}</h2>
+                  <p>{i18n.text('rules.description')}</p>
+                </div>
+                <button class="btn btn-primary btn-sm" type="button">
+                  <i class="bi bi-plus-lg me-1"></i>
+                  {i18n.text('rules.new')}
+                </button>
+              </div>
+              {#if dashboard.rules.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-shield-plus"></i>
+                  <h3>{i18n.text('rules.emptyTitle')}</h3>
+                  <p>{i18n.text('rules.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="list-group list-group-flush">
+                  {#each dashboard.rules as rule (rule.id)}
+                    <div class="list-group-item">
+                      <div class="d-flex justify-content-between gap-3">
+                        <div>
+                          <div class="fw-semibold">{rule.name}</div>
+                          <div class="text-body-secondary small">{rule.applicationName ?? i18n.text('rules.global')}</div>
+                        </div>
+                        <span class="badge text-bg-info align-self-start">{rule.action}</span>
+                      </div>
+                    </div>
                   {/each}
                 </div>
-              </div>
+              {/if}
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="col-12">
-        <div class="card shadow-sm">
-          <div class="card-header d-flex align-items-center justify-content-between">
-            <span class="fw-semibold">{i18n.text('components.title')}</span>
-            <button class="btn btn-outline-secondary btn-sm" type="button" title={i18n.text('services.refresh')}>
-              <i class="bi bi-arrow-clockwise"></i>
-            </button>
-          </div>
-          <div class="card-body">
-            <p class="text-body-secondary small mb-3">{i18n.text('components.description')}</p>
-            <div class="row g-3">
-              {#each managedComponents as component (component.name)}
-                <div class="col-12 col-md-6 col-xl-3">
-                  <div class="border rounded-2 h-100 p-3 bg-body">
-                    <div class="d-flex justify-content-between gap-2">
-                      <div>
-                        <div class="fw-semibold">{component.name}</div>
-                        <div class="text-body-secondary small">{component.scope}</div>
-                      </div>
-                      <span class={`badge align-self-start ${component.coreManaged ? 'text-bg-primary' : 'text-bg-secondary'}`}>
-                        {component.coreManaged ? i18n.text('components.coreManaged') : i18n.text('components.externalManaged')}
-                      </span>
-                    </div>
-                    <div class="small mt-3">
-                      <span class="text-body-secondary">{i18n.text('components.applyMode')}:</span>
-                      <span class="fw-semibold">{applyModeLabel(component.applyMode)}</span>
-                    </div>
-                    <div class="d-flex flex-wrap gap-1 mt-3">
-                      {#each component.capabilities as capability (`${component.name}:${capability}`)}
-                        <span class="badge text-bg-light border">{capability}</span>
-                      {/each}
-                    </div>
-                  </div>
+          {:else if currentRoute === 'dns'}
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('dns.title')}</h2>
+                  <p>{i18n.text('dns.description')}</p>
                 </div>
-              {/each}
+                <button class="btn btn-primary btn-sm" type="button">
+                  <i class="bi bi-plus-lg me-1"></i>
+                  {i18n.text('dns.add')}
+                </button>
+              </div>
+              {#if dashboard.dnsRecords.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-diagram-3"></i>
+                  <h3>{i18n.text('dns.emptyTitle')}</h3>
+                  <p>{i18n.text('dns.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="table-responsive">
+                  <table class="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">Type</th>
+                        <th scope="col">{i18n.text('dns.name')}</th>
+                        <th scope="col">Value</th>
+                        <th scope="col">{i18n.text('dns.proxy')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dashboard.dnsRecords as record (record.id)}
+                        <tr>
+                          <td>{record.type}</td>
+                          <td>{record.name}</td>
+                          <td><code>{record.value}</code></td>
+                          <td>{record.proxied ? i18n.text('dns.proxied') : i18n.text('dns.dnsOnly')}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="col-12">
-        <div class="card shadow-sm">
-          <div class="card-header fw-semibold">{i18n.text('certificates.title')}</div>
-          <div class="table-responsive">
-            <table class="table align-middle mb-0">
-              <thead>
-                <tr>
-                  <th scope="col">{i18n.text('certificates.domain')}</th>
-                  <th scope="col">{i18n.text('certificates.issuer')}</th>
-                  <th scope="col">{i18n.text('certificates.status')}</th>
-                  <th scope="col">{i18n.text('certificates.renewal')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each certificates as certificate (certificate.domain)}
-                  <tr>
-                    <th scope="row">{certificate.domain}</th>
-                    <td>{certificate.issuer}</td>
-                    <td>{i18n.text(certificate.statusKey)}</td>
-                    <td>{i18n.text(certificate.renewalKey)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
+          {:else}
+            <div class="workspace-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>{i18n.text('audit.title')}</h2>
+                  <p>{i18n.text('audit.description')}</p>
+                </div>
+              </div>
+              {#if dashboard.auditEvents.length === 0}
+                <div class="empty-state">
+                  <i class="bi bi-clock-history"></i>
+                  <h3>{i18n.text('audit.emptyTitle')}</h3>
+                  <p>{i18n.text('audit.emptyDescription')}</p>
+                </div>
+              {:else}
+                <div class="table-responsive">
+                  <table class="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th scope="col">{i18n.text('audit.when')}</th>
+                        <th scope="col">{i18n.text('audit.actor')}</th>
+                        <th scope="col">{i18n.text('audit.action')}</th>
+                        <th scope="col">{i18n.text('audit.resource')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each dashboard.auditEvents as event (event.id)}
+                        <tr>
+                          <td>{event.createdAt}</td>
+                          <td>{event.actor}</td>
+                          <td>{event.action}</td>
+                          <td>{event.resource}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </section>
+      </div>
     </div>
-  </div>
   {/if}
 </main>
 
@@ -566,16 +548,10 @@
     min-width: 320px;
   }
 
-  .navbar-brand {
-    letter-spacing: 0;
-  }
-
-  .display-6 {
-    font-weight: 600;
-  }
-
-  .language-select {
-    min-width: 8.5rem;
+  .brand-lockup {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
   }
 
   .auth-shell {
@@ -592,5 +568,242 @@
     border-radius: .5rem;
     padding: 2rem;
     box-shadow: 0 1rem 3rem rgba(15, 23, 42, .16);
+  }
+
+  .admin-shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 16rem minmax(0, 1fr);
+    background: #f5f7fb;
+  }
+
+  .admin-sidebar {
+    background: #111827;
+    color: #e5e7eb;
+    padding: 1.25rem;
+    border-right: 1px solid rgba(255, 255, 255, .08);
+  }
+
+  .admin-brand {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    color: #ffffff;
+    text-decoration: none;
+    font-weight: 700;
+    padding: .75rem .5rem 1.25rem;
+  }
+
+  .admin-nav {
+    display: grid;
+    gap: .25rem;
+  }
+
+  .admin-nav a {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    color: #aeb7c7;
+    text-decoration: none;
+    border-radius: .5rem;
+    padding: .75rem;
+    font-weight: 600;
+  }
+
+  .admin-nav a:hover,
+  .admin-nav a.active {
+    background: #243044;
+    color: #ffffff;
+  }
+
+  .admin-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .admin-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 5.5rem;
+    padding: 1.25rem 1.5rem;
+    background: #ffffff;
+    border-bottom: 1px solid #dfe4ec;
+  }
+
+  .admin-topbar h1 {
+    font-size: 1.35rem;
+    line-height: 1.2;
+    margin: 0;
+  }
+
+  .section-kicker {
+    color: #667085;
+    font-size: .78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .admin-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+
+  .language-select {
+    min-width: 8.5rem;
+  }
+
+  .icon-button {
+    width: 2rem;
+    height: 2rem;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid #cfd6e3;
+    border-radius: .375rem;
+    background: #ffffff;
+    color: #344054;
+  }
+
+  .content-shell {
+    padding: 1.5rem;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .metric-card,
+  .workspace-panel {
+    background: #ffffff;
+    border: 1px solid #dfe4ec;
+    border-radius: .5rem;
+  }
+
+  .metric-card {
+    padding: 1rem;
+    display: grid;
+    gap: .5rem;
+  }
+
+  .metric-card span {
+    color: #667085;
+    font-size: .875rem;
+    font-weight: 600;
+  }
+
+  .metric-card strong {
+    color: #101828;
+    font-size: 2rem;
+    line-height: 1;
+  }
+
+  .panel-heading {
+    min-height: 4.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem;
+    border-bottom: 1px solid #e6ebf2;
+  }
+
+  .panel-heading h2 {
+    font-size: 1rem;
+    margin: 0;
+  }
+
+  .panel-heading p {
+    color: #667085;
+    margin: .25rem 0 0;
+  }
+
+  .empty-state {
+    min-height: 18rem;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: .75rem;
+    text-align: center;
+    padding: 2rem;
+    color: #667085;
+  }
+
+  .empty-state i {
+    font-size: 2rem;
+    color: #3b82f6;
+  }
+
+  .empty-state h3 {
+    margin: 0;
+    color: #101828;
+    font-size: 1.1rem;
+  }
+
+  .empty-state p {
+    max-width: 35rem;
+    margin: 0;
+  }
+
+  @media (max-width: 991.98px) {
+    .admin-shell {
+      grid-template-columns: 1fr;
+    }
+
+    .admin-sidebar {
+      position: static;
+      padding: .75rem;
+    }
+
+    .admin-brand {
+      padding: .5rem;
+    }
+
+    .admin-nav {
+      display: flex;
+      overflow-x: auto;
+      padding-bottom: .25rem;
+    }
+
+    .admin-nav a {
+      flex: 0 0 auto;
+    }
+
+    .admin-topbar {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .admin-actions {
+      justify-content: flex-start;
+      width: 100%;
+    }
+
+    .metric-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 575.98px) {
+    .content-shell {
+      padding: 1rem;
+    }
+
+    .metric-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .panel-heading {
+      align-items: flex-start;
+      flex-direction: column;
+    }
   }
 </style>

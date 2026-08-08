@@ -1,5 +1,6 @@
 use crate::auth::{hash_password, verify_password};
 use crate::components::component_catalog;
+use crate::config::{ConfigFileStore, PlatformConfig, PowerDnsMode};
 use axum::extract::State;
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -24,6 +25,7 @@ pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub initial_admin_password: String,
     pub secure_cookies: bool,
+    pub platform_config: PlatformConfig,
 }
 
 #[derive(Clone)]
@@ -32,6 +34,7 @@ struct AppState {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     throttles: Arc<Mutex<HashMap<String, LoginThrottle>>>,
     secure_cookies: bool,
+    platform_config: PlatformConfig,
 }
 
 #[derive(Clone)]
@@ -84,6 +87,48 @@ struct SessionResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PublicConfigurationResponse {
+    modules: PublicModuleSection,
+    integrations: PublicIntegrationSection,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicModuleSection {
+    crowdsec: PublicModuleToggle,
+    powerdns: PublicModuleToggle,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicModuleToggle {
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicIntegrationSection {
+    powerdns: PublicPowerDnsIntegration,
+    crowdsec: PublicCrowdSecIntegration,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicPowerDnsIntegration {
+    mode: &'static str,
+    api_url_configured: bool,
+    api_key_configured: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicCrowdSecIntegration {
+    local_api_configured: bool,
+    api_key_configured: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionUser {
     username: String,
     password_change_required: bool,
@@ -97,11 +142,16 @@ impl ServerConfig {
             .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 8080)));
         let initial_admin_password = std::env::var("BAIA_INITIAL_ADMIN_PASSWORD")
             .unwrap_or_else(|_| "change-this-initial-admin-password".to_string());
+        let platform_config = std::env::var("BAIA_CONFIG_PATH")
+            .ok()
+            .and_then(|path| ConfigFileStore::new(path).load().ok())
+            .unwrap_or_default();
 
         Self {
             bind_addr,
             initial_admin_password,
             secure_cookies: true,
+            platform_config,
         }
     }
 
@@ -110,6 +160,7 @@ impl ServerConfig {
             bind_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             initial_admin_password: initial_admin_password.to_string(),
             secure_cookies: true,
+            platform_config: PlatformConfig::default(),
         }
     }
 }
@@ -131,6 +182,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         sessions: Arc::new(Mutex::new(HashMap::new())),
         throttles: Arc::new(Mutex::new(HashMap::new())),
         secure_cookies: config.secure_cookies,
+        platform_config: config.platform_config,
     };
 
     Router::new()
@@ -336,7 +388,7 @@ async fn configuration(State(state): State<AppState>, headers: HeaderMap) -> Res
         return error(StatusCode::UNAUTHORIZED, "Authentication required");
     }
 
-    Json(json!({ "status": "ready" })).into_response()
+    Json(public_configuration(&state.platform_config)).into_response()
 }
 
 async fn configuration_patch(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -365,6 +417,37 @@ fn authenticated_mutation(state: AppState, headers: HeaderMap) -> Response {
     }
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn public_configuration(config: &PlatformConfig) -> PublicConfigurationResponse {
+    PublicConfigurationResponse {
+        modules: PublicModuleSection {
+            crowdsec: PublicModuleToggle {
+                enabled: config.modules.crowdsec.enabled,
+            },
+            powerdns: PublicModuleToggle {
+                enabled: config.modules.powerdns.enabled,
+            },
+        },
+        integrations: PublicIntegrationSection {
+            powerdns: PublicPowerDnsIntegration {
+                mode: powerdns_mode(&config.integrations.powerdns.mode),
+                api_url_configured: config.integrations.powerdns.api_url.is_some(),
+                api_key_configured: config.integrations.powerdns.api_key_env.is_some(),
+            },
+            crowdsec: PublicCrowdSecIntegration {
+                local_api_configured: config.integrations.crowdsec.local_api_url.is_some(),
+                api_key_configured: config.integrations.crowdsec.api_key_env.is_some(),
+            },
+        },
+    }
+}
+
+fn powerdns_mode(mode: &PowerDnsMode) -> &'static str {
+    match mode {
+        PowerDnsMode::Integrated => "integrated",
+        PowerDnsMode::External => "external",
+    }
 }
 
 fn require_session(state: &AppState, headers: &HeaderMap) -> Option<Session> {

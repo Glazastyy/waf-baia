@@ -158,6 +158,58 @@ async fn repeated_invalid_logins_are_locked_without_leaking_account_state() {
     assert_eq!(locked.headers().get(SET_COOKIE), None);
 }
 
+#[tokio::test]
+async fn authenticated_configuration_returns_loaded_platform_configuration() {
+    let mut server_config = ServerConfig::for_tests("correct-password");
+    server_config.platform_config.modules.crowdsec.enabled = true;
+    server_config.platform_config.modules.powerdns.enabled = true;
+    let app = build_router(server_config);
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/auth/login",
+            r#"{"username":"admin","password":"correct-password"}"#,
+        ))
+        .await
+        .expect("request must complete");
+    let session_cookie = login
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .find_map(|value| {
+            let raw = value.to_str().expect("cookie must be valid ascii");
+            raw.starts_with("baia_session=").then(|| raw.to_string())
+        })
+        .expect("session cookie must be set");
+
+    let configuration = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/configuration")
+                .header(COOKIE, cookie_pair(&session_cookie))
+                .body(Body::empty())
+                .expect("request must build"),
+        )
+        .await
+        .expect("request must complete");
+
+    assert_eq!(configuration.status(), StatusCode::OK);
+    let body = response_json(configuration).await;
+    assert_eq!(body["modules"]["crowdsec"]["enabled"], true);
+    assert_eq!(body["modules"]["powerdns"]["enabled"], true);
+    assert_eq!(body["integrations"]["powerdns"]["mode"], "integrated");
+    assert_eq!(body["integrations"]["powerdns"]["apiUrlConfigured"], true);
+    assert_eq!(body["integrations"]["powerdns"]["apiKeyConfigured"], true);
+    assert_eq!(body["integrations"]["crowdsec"]["localApiConfigured"], true);
+    assert_eq!(body["integrations"]["crowdsec"]["apiKeyConfigured"], true);
+    assert_eq!(body["integrations"]["powerdns"]["apiUrl"], Value::Null);
+    assert_eq!(body["integrations"]["powerdns"]["apiKeyEnv"], Value::Null);
+    assert_eq!(body["integrations"]["crowdsec"]["localApiUrl"], Value::Null);
+    assert_eq!(body["integrations"]["crowdsec"]["apiKeyEnv"], Value::Null);
+}
+
 fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method(method)
