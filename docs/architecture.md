@@ -178,7 +178,7 @@ O Core verifica se existe usuário admin. Se não existir, gera usuário `admin`
 
 ## 13. Integração com PowerDNS
 
-Modo integrado: Compose sobe PowerDNS Authoritative, banco PostgreSQL dedicado e PowerAdmin. O Core usa a API local do PowerDNS para criar zonas e registros.
+Modo integrado: Compose sobe PowerDNS Authoritative e PowerAdmin usando a mesma instância PostgreSQL da plataforma, em um banco `powerdns` separado do banco `baia`. O Core usa a API local do PowerDNS para criar zonas e registros.
 
 Modo externo: o Core recebe URL e API key via configuração/secret e usa o mesmo cliente HTTP, com allowlist de host e timeout explícito.
 
@@ -230,7 +230,7 @@ Logs estruturados com correlação por request. Auditoria em `audit_events` para
 
 ## 23. Docker Compose Inicial
 
-`deploy/compose/docker-compose.yml` sobe Core, Web, Caddy, PostgreSQL, Redis, CrowdSec, PowerDNS, banco do PowerDNS e PowerAdmin. Cada serviço fica em container separado, com volumes próprios e health checks onde aplicável.
+`deploy/compose/docker-compose.yml` sobe Core, Web, Caddy, PostgreSQL, Redis, CrowdSec, PowerDNS e PowerAdmin. O PostgreSQL mantém bancos separados para a plataforma e para o PowerDNS na mesma instância. Cada serviço fica em container separado, com volumes próprios e health checks onde aplicável.
 
 ## 24. Dockerfiles Necessários
 

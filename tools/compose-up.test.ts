@@ -69,7 +69,7 @@ describe('compose up helper', () => {
     expect(output.at(-5)).toBe('Baia WAF access');
     expect(output.at(-4)).toBe('Admin URL: https://admin.example.test/login');
     expect(output.at(-3)).toBe('Admin user: admin');
-    expect(output.at(-2)?.startsWith('Initial admin password: ')).toBe(true);
+    expect(output.at(-2)?.startsWith('Initial admin password (only valid before first password change): ')).toBe(true);
     expect(output.at(-1)).toBe('Caddy admin API: internal only (http://caddy:2019)');
   });
 
@@ -90,6 +90,93 @@ describe('compose up helper', () => {
     const secrets = await readFile(join(root, 'config', 'secrets.env'), 'utf8');
     expect(secrets).toContain('POSTGRES_PASSWORD=existing-postgres');
     expect(secrets).toContain('BAIA_INITIAL_ADMIN_PASSWORD=');
-    expect(output.at(-2)?.startsWith('Initial admin password: ')).toBe(true);
+    expect(output.at(-2)?.startsWith('Initial admin password (only valid before first password change): ')).toBe(true);
+  });
+
+  test('asks before pulling github updates and applies them before starting compose', async () => {
+    const root = await createComposeFixture();
+    const output: string[] = [];
+    const commands: string[][] = [];
+
+    await runComposeUp({
+      root,
+      writeLine: (line) => output.push(line),
+      confirmUpdate: async () => true,
+      runCommandWithOutput: async (command) => {
+        commands.push(command);
+
+        if (command.at(-1) === '--is-inside-work-tree') {
+          return { exitCode: 0, stdout: 'true\n' };
+        }
+
+        if (command.at(-1) === '@{upstream}') {
+          return { exitCode: 0, stdout: 'origin/master\n' };
+        }
+
+        if (command.at(-1) === 'HEAD..@{upstream}') {
+          return { exitCode: 0, stdout: '2\n' };
+        }
+
+        return { exitCode: 0, stdout: '' };
+      },
+      runCommand: async (command) => {
+        commands.push(command);
+        return 0;
+      }
+    });
+
+    expect(commands).toEqual([
+      ['git', 'rev-parse', '--is-inside-work-tree'],
+      ['git', 'fetch', '--quiet'],
+      ['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+      ['git', 'rev-list', '--count', 'HEAD..@{upstream}'],
+      ['git', 'pull', '--ff-only'],
+      [
+        'docker',
+        'compose',
+        '--env-file',
+        'config/secrets.env',
+        '-f',
+        'deploy/compose/docker-compose.yml',
+        'up',
+        '--build',
+        '--detach'
+      ]
+    ]);
+    expect(output).toContain('GitHub update available: 2 commit(s) behind origin/master');
+    expect(output).toContain('updated local checkout from GitHub');
+  });
+
+  test('keeps local checkout unchanged when github update is declined', async () => {
+    const root = await createComposeFixture();
+    const commands: string[][] = [];
+
+    await runComposeUp({
+      root,
+      confirmUpdate: async () => false,
+      runCommandWithOutput: async (command) => {
+        commands.push(command);
+
+        if (command.at(-1) === '--is-inside-work-tree') {
+          return { exitCode: 0, stdout: 'true\n' };
+        }
+
+        if (command.at(-1) === '@{upstream}') {
+          return { exitCode: 0, stdout: 'origin/master\n' };
+        }
+
+        if (command.at(-1) === 'HEAD..@{upstream}') {
+          return { exitCode: 0, stdout: '1\n' };
+        }
+
+        return { exitCode: 0, stdout: '' };
+      },
+      runCommand: async (command) => {
+        commands.push(command);
+        return 0;
+      }
+    });
+
+    expect(commands.some((command) => command.join(' ') === 'git pull --ff-only')).toBe(false);
   });
 });

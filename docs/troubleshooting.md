@@ -159,7 +159,7 @@ Check:
 - `modules.powerdns.enabled` is true
 - `integrations.powerdns.apiUrl` points to the correct API base
 - `BAIA_POWERDNS_API_KEY` exists in `config/secrets.env`
-- the integrated `powerdns-db` service is running when using integrated mode
+- the integrated `postgres` service is healthy and the `powerdns` database exists when using integrated mode
 
 ## CrowdSec Decisions Do Not Affect Caddy
 

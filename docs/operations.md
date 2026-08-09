@@ -16,13 +16,17 @@ Start:
 bun run compose:up
 ```
 
-The start command uses detached Compose mode and prints the access summary only after Docker has finished. No container logs are streamed after the admin URL and credentials.
+The start command checks the configured upstream Git branch for updates when running in an interactive terminal. If new commits are available, it asks whether to run `git pull --ff-only` before setup, generation and Docker Compose startup. The default answer is no.
+
+The start command uses detached Compose mode and prints the access summary only after Docker has finished. No container logs are streamed after the admin URL and credentials. The printed initial admin password is only valid before the first password change.
 
 Stop:
 
 ```sh
 bun run compose:down
 ```
+
+This stops and removes containers and the Compose network, but preserves named volumes. The Core persists control-plane state in Postgres before returning successful mutating API responses, so regular `compose:down` followed by `compose:up` must not reset users, applications, rules, DNS records, certificates or audit events.
 
 Validate generated Compose configuration:
 
@@ -99,7 +103,6 @@ bun test
 Back up these volumes before destructive maintenance:
 
 - `postgres-data`
-- `powerdns-db-data`
 - `redis-data` when Redis persistence matters
 - `caddy-data`
 - `caddy-config`

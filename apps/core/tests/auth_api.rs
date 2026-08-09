@@ -268,7 +268,13 @@ async fn applications_can_be_created_and_listed_without_sample_data() {
         .expect("request must complete");
 
     let listed_body = response_json(listed).await;
-    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(
+        listed_body["items"]
+            .as_array()
+            .expect("items must be array")
+            .len(),
+        1
+    );
     assert_eq!(listed_body["items"][0]["hostname"], "portal.example.com");
 }
 
@@ -316,7 +322,9 @@ async fn waf_rules_can_be_created_for_existing_applications_and_listed() {
     let app = build_router(ServerConfig::for_tests("correct-password"));
     let authenticated = login_session(&app).await;
     let application = create_application(&app, &authenticated).await;
-    let application_id = application["id"].as_str().expect("application id must exist");
+    let application_id = application["id"]
+        .as_str()
+        .expect("application id must exist");
 
     let empty = app
         .clone()
@@ -372,7 +380,13 @@ async fn waf_rules_can_be_created_for_existing_applications_and_listed() {
         .expect("request must complete");
 
     let listed_body = response_json(listed).await;
-    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(
+        listed_body["items"]
+            .as_array()
+            .expect("items must be array")
+            .len(),
+        1
+    );
     assert_eq!(listed_body["items"][0]["applicationName"], "Portal");
 }
 
@@ -417,7 +431,10 @@ async fn waf_rules_reject_invalid_action_and_missing_application() {
         .await
         .expect("request must complete");
 
-    assert_eq!(missing_application.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        missing_application.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 
     let listed = app
         .oneshot(
@@ -453,7 +470,10 @@ async fn dns_records_can_be_created_and_listed_without_sample_data() {
         .expect("request must complete");
 
     assert_eq!(empty_records.status(), StatusCode::OK);
-    assert_eq!(response_json(empty_records).await["items"], serde_json::json!([]));
+    assert_eq!(
+        response_json(empty_records).await["items"],
+        serde_json::json!([])
+    );
 
     let created = app
         .clone()
@@ -494,7 +514,13 @@ async fn dns_records_can_be_created_and_listed_without_sample_data() {
         .await
         .expect("request must complete");
     let listed_body = response_json(listed_records).await;
-    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(
+        listed_body["items"]
+            .as_array()
+            .expect("items must be array")
+            .len(),
+        1
+    );
     assert_eq!(listed_body["items"][0]["name"], "portal.example.com");
 
     let listed_zones = app
@@ -509,7 +535,13 @@ async fn dns_records_can_be_created_and_listed_without_sample_data() {
         .await
         .expect("request must complete");
     let zones_body = response_json(listed_zones).await;
-    assert_eq!(zones_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(
+        zones_body["items"]
+            .as_array()
+            .expect("items must be array")
+            .len(),
+        1
+    );
     assert_eq!(zones_body["items"][0]["name"], "example.com");
 }
 
@@ -574,7 +606,9 @@ async fn audit_events_start_empty_and_track_administrative_creates() {
     assert_eq!(response_json(empty).await["items"], serde_json::json!([]));
 
     let application = create_application(&app, &authenticated).await;
-    let application_id = application["id"].as_str().expect("application id must exist");
+    let application_id = application["id"]
+        .as_str()
+        .expect("application id must exist");
     create_waf_rule(&app, &authenticated, application_id).await;
     create_dns_record(&app, &authenticated).await;
 
@@ -608,7 +642,9 @@ async fn certificates_can_be_created_and_listed_without_sample_data() {
     let app = build_router(ServerConfig::for_tests("correct-password"));
     let authenticated = login_session(&app).await;
     let application = create_application(&app, &authenticated).await;
-    let application_id = application["id"].as_str().expect("application id must exist");
+    let application_id = application["id"]
+        .as_str()
+        .expect("application id must exist");
 
     let empty = app
         .clone()
@@ -665,7 +701,13 @@ async fn certificates_can_be_created_and_listed_without_sample_data() {
         .expect("request must complete");
 
     let listed_body = response_json(listed).await;
-    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(
+        listed_body["items"]
+            .as_array()
+            .expect("items must be array")
+            .len(),
+        1
+    );
     assert_eq!(listed_body["items"][0]["domain"], "portal.example.com");
 }
 
@@ -713,7 +755,9 @@ async fn rate_limits_can_be_created_and_listed_without_sample_data() {
     let app = build_router(ServerConfig::for_tests("correct-password"));
     let authenticated = login_session(&app).await;
     let application = create_application(&app, &authenticated).await;
-    let application_id = application["id"].as_str().expect("application id must exist");
+    let application_id = application["id"]
+        .as_str()
+        .expect("application id must exist");
 
     let empty = app
         .clone()
@@ -772,7 +816,13 @@ async fn rate_limits_can_be_created_and_listed_without_sample_data() {
         .expect("request must complete");
 
     let listed_body = response_json(listed).await;
-    assert_eq!(listed_body["items"].as_array().expect("items must be array").len(), 1);
+    assert_eq!(
+        listed_body["items"]
+            .as_array()
+            .expect("items must be array")
+            .len(),
+        1
+    );
     assert_eq!(listed_body["items"][0]["name"], "Login burst");
 }
 
