@@ -16,6 +16,19 @@ services:
     networks:
       - baia
 
+  postgres-init:
+    image: postgres:18.1-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command: ["sh", "-c", "psql -h postgres -U baia -d baia -v ON_ERROR_STOP=1 -f /init/00-create-powerdns.sql"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./postgres-init/00-create-powerdns.sql:/init/00-create-powerdns.sql:ro
+    networks:
+      - baia
+
   redis:
     image: redis:8.4.5-alpine
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
@@ -40,6 +53,8 @@ services:
       DATABASE_URL: postgres://baia:${POSTGRES_PASSWORD}@postgres:5432/baia
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
+      postgres-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -90,17 +105,6 @@ services:
     networks:
       - baia
 
-  powerdns-db:
-    image: postgres:18.1-alpine
-    environment:
-      POSTGRES_DB: powerdns
-      POSTGRES_USER: powerdns
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - powerdns-db-data:/var/lib/postgresql/data
-    networks:
-      - baia
-
   powerdns:
     image: powerdns/pdns-auth-51:5.1.3
     environment:
@@ -110,24 +114,28 @@ services:
       PDNS_AUTH_WEBSERVER_ADDRESS: 0.0.0.0
       PDNS_AUTH_WEBSERVER_ALLOW_FROM: 0.0.0.0/0
       PDNS_AUTH_LAUNCH: gpgsql
-      PDNS_AUTH_GPGSQL_HOST: powerdns-db
-      PDNS_AUTH_GPGSQL_USER: powerdns
+      PDNS_AUTH_GPGSQL_HOST: postgres
+      PDNS_AUTH_GPGSQL_USER: baia
       PDNS_AUTH_GPGSQL_PASSWORD: ${POSTGRES_PASSWORD}
       PDNS_AUTH_GPGSQL_DBNAME: powerdns
     depends_on:
-      - powerdns-db
+      postgres-init:
+        condition: service_completed_successfully
     networks:
       - baia
 
   poweradmin:
     image: poweradmin/poweradmin:stable
     environment:
-      DB_HOST: powerdns-db
-      DB_USER: powerdns
+      DB_HOST: postgres
+      DB_USER: baia
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_NAME: powerdns
     depends_on:
-      - powerdns
+      postgres-init:
+        condition: service_completed_successfully
+      powerdns:
+        condition: service_started
     networks:
       - baia
 
@@ -143,4 +151,3 @@ volumes:
   caddy-logs:
   crowdsec-data:
   crowdsec-config:
-  powerdns-db-data:

@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE users (
@@ -137,3 +139,5 @@ INSERT INTO roles (name, description) VALUES
     ('Security Operator', 'WAF, CrowdSec and security event operations'),
     ('Operator', 'Operational changes without user or role management'),
     ('Read Only', 'Read-only platform access');
+
+COMMIT;

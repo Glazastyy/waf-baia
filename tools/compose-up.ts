@@ -2,6 +2,8 @@ import { constants } from 'node:fs';
 import { access, appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 import { runSetup } from './setup';
 import { writeGeneratedCaddyfile } from './caddyfile';
 
@@ -9,6 +11,9 @@ export type ComposeUpOptions = {
   root?: string;
   writeLine?: (line: string) => void;
   runCommand?: (command: string[], cwd: string) => Promise<number>;
+  runCommandWithOutput?: (command: string[], cwd: string) => Promise<CommandOutput>;
+  confirmUpdate?: (details: GitUpdateDetails) => Promise<boolean>;
+  checkForUpdates?: boolean;
 };
 
 type AccessDetails = {
@@ -16,6 +21,16 @@ type AccessDetails = {
   adminUser: string;
   initialAdminPassword: string;
   caddyAdminApi: string;
+};
+
+type CommandOutput = {
+  exitCode: number;
+  stdout: string;
+};
+
+type GitUpdateDetails = {
+  upstream: string;
+  commitsBehind: number;
 };
 
 const composeCommand = [
@@ -34,6 +49,12 @@ export async function runComposeUp(options: ComposeUpOptions = {}): Promise<void
   const root = options.root ?? process.cwd();
   const writeLine = options.writeLine ?? ((line: string) => console.log(line));
   const runCommand = options.runCommand ?? runInheritedCommand;
+  const runCommandWithOutput = options.runCommandWithOutput ?? runBufferedCommand;
+  const confirmUpdate = options.confirmUpdate ?? confirmGitUpdate;
+
+  if (options.checkForUpdates ?? true) {
+    await updateFromGitHubIfRequested(root, writeLine, runCommand, runCommandWithOutput, confirmUpdate);
+  }
 
   const setup = await runSetup({ root });
 
@@ -59,8 +80,70 @@ export async function runComposeUp(options: ComposeUpOptions = {}): Promise<void
   writeLine('Baia WAF access');
   writeLine(`Admin URL: ${access.adminUrl}`);
   writeLine(`Admin user: ${access.adminUser}`);
-  writeLine(`Initial admin password: ${access.initialAdminPassword}`);
+  writeLine(`Initial admin password (only valid before first password change): ${access.initialAdminPassword}`);
   writeLine(`Caddy admin API: ${access.caddyAdminApi}`);
+}
+
+async function updateFromGitHubIfRequested(
+  root: string,
+  writeLine: (line: string) => void,
+  runCommand: (command: string[], cwd: string) => Promise<number>,
+  runCommandWithOutput: (command: string[], cwd: string) => Promise<CommandOutput>,
+  confirmUpdate: (details: GitUpdateDetails) => Promise<boolean>
+): Promise<void> {
+  const insideWorkTree = await runCommandWithOutput(['git', 'rev-parse', '--is-inside-work-tree'], root);
+
+  if (insideWorkTree.exitCode !== 0 || insideWorkTree.stdout.trim() !== 'true') {
+    return;
+  }
+
+  const fetchExitCode = await runCommand(['git', 'fetch', '--quiet'], root);
+
+  if (fetchExitCode !== 0) {
+    writeLine('could not check GitHub updates; continuing with local checkout');
+    return;
+  }
+
+  const upstream = await runCommandWithOutput(
+    ['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    root
+  );
+
+  if (upstream.exitCode !== 0 || upstream.stdout.trim().length === 0) {
+    return;
+  }
+
+  const behind = await runCommandWithOutput(['git', 'rev-list', '--count', 'HEAD..@{upstream}'], root);
+
+  if (behind.exitCode !== 0) {
+    writeLine('could not compare GitHub updates; continuing with local checkout');
+    return;
+  }
+
+  const commitsBehind = Number.parseInt(behind.stdout.trim(), 10);
+
+  if (!Number.isSafeInteger(commitsBehind) || commitsBehind <= 0) {
+    return;
+  }
+
+  const details = {
+    upstream: upstream.stdout.trim(),
+    commitsBehind
+  };
+  writeLine(`GitHub update available: ${details.commitsBehind} commit(s) behind ${details.upstream}`);
+
+  if (!(await confirmUpdate(details))) {
+    writeLine('skipped GitHub update');
+    return;
+  }
+
+  const pullExitCode = await runCommand(['git', 'pull', '--ff-only'], root);
+
+  if (pullExitCode !== 0) {
+    throw new Error('git pull --ff-only failed');
+  }
+
+  writeLine('updated local checkout from GitHub');
 }
 
 async function ensureInitialAdminPassword(root: string): Promise<void> {
@@ -172,6 +255,38 @@ async function runInheritedCommand(command: string[], cwd: string): Promise<numb
   });
 
   return await child.exited;
+}
+
+async function runBufferedCommand(command: string[], cwd: string): Promise<CommandOutput> {
+  const child = Bun.spawn(command, {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe'
+  });
+  const stdout = await new Response(child.stdout).text();
+  await new Response(child.stderr).text();
+
+  return {
+    exitCode: await child.exited,
+    stdout
+  };
+}
+
+async function confirmGitUpdate(details: GitUpdateDetails): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return false;
+  }
+
+  const readline = createInterface({ input, output });
+
+  try {
+    const answer = await readline.question(
+      `Update from ${details.upstream} before starting? (${details.commitsBehind} commit(s)) [y/N] `
+    );
+    return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
+  } finally {
+    readline.close();
+  }
 }
 
 async function exists(path: string): Promise<boolean> {

@@ -4,6 +4,8 @@ import { join } from 'node:path';
 
 const composePath = join(import.meta.dir, '..', 'deploy/compose/docker-compose.yml');
 const webDockerfilePath = join(import.meta.dir, '..', 'apps/web/Dockerfile');
+const coreServerPath = join(import.meta.dir, '..', 'apps/core/src/server.rs');
+const postgresInitPath = join(import.meta.dir, '..', 'deploy/compose/postgres-init/00-create-powerdns.sql');
 
 describe('compose image tags', () => {
   test('uses verified service image tags', () => {
@@ -40,5 +42,25 @@ describe('compose image tags', () => {
     expect(compose).not.toContain('- "6379:6379"');
     expect(compose).not.toContain('- "8081:8081"');
     expect(compose).not.toContain('- "53:53"');
+  });
+
+  test('uses one postgres instance with separate databases for core and powerdns', () => {
+    const compose = readFileSync(composePath, 'utf8');
+    const postgresInit = readFileSync(postgresInitPath, 'utf8');
+
+    expect(compose).toContain('postgres:');
+    expect(compose).not.toContain('powerdns-db:');
+    expect(compose).toContain('postgres-init/00-create-powerdns.sql');
+    expect(postgresInit).toContain('CREATE DATABASE powerdns OWNER baia');
+    expect(compose).toContain('PDNS_AUTH_GPGSQL_HOST: postgres');
+    expect(compose).toContain('DB_HOST: postgres');
+    expect(compose).not.toContain('powerdns-db-data:');
+  });
+
+  test('persists core state with explicit postgres transactions', () => {
+    const server = readFileSync(coreServerPath, 'utf8');
+
+    expect(server).toContain('transaction().await?');
+    expect(server).toContain('transaction.commit().await?');
   });
 });

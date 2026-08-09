@@ -11,9 +11,12 @@ use rand::distr::{Alphanumeric, SampleString};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::Mutex as AsyncMutex;
+use tokio_postgres::{Client, NoTls};
 
 const SESSION_COOKIE: &str = "baia_session";
 const SESSION_TTL_SECONDS: u64 = 8 * 60 * 60;
@@ -24,6 +27,7 @@ const LOGIN_LOCK_SECONDS: u64 = 15 * 60;
 pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub initial_admin_password: String,
+    pub database_url: Option<String>,
     pub secure_cookies: bool,
     pub platform_config: PlatformConfig,
 }
@@ -40,11 +44,12 @@ struct AppState {
     dns_records: Arc<Mutex<Vec<DnsRecordRecord>>>,
     certificates: Arc<Mutex<Vec<CertificateRecord>>>,
     audit_events: Arc<Mutex<Vec<AuditEventRecord>>>,
+    persistence: Option<PostgresStateStore>,
     secure_cookies: bool,
     platform_config: PlatformConfig,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct UserAccount {
     username: String,
     password_hash: String,
@@ -65,7 +70,7 @@ struct LoginThrottle {
     locked_until: Option<Instant>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ApplicationRecord {
     id: String,
     name: String,
@@ -74,7 +79,7 @@ struct ApplicationRecord {
     upstreams: Vec<UpstreamRecord>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct UpstreamRecord {
     id: String,
     dial: String,
@@ -82,7 +87,7 @@ struct UpstreamRecord {
     enabled: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct WafRuleRecord {
     id: String,
     name: String,
@@ -94,7 +99,7 @@ struct WafRuleRecord {
     enabled: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum WafRuleAction {
     Allow,
     Block,
@@ -103,7 +108,7 @@ enum WafRuleAction {
     Log,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct RateLimitRecord {
     id: String,
     name: String,
@@ -116,21 +121,21 @@ struct RateLimitRecord {
     enabled: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum RateLimitAction {
     Block,
     Challenge,
     Log,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct DnsZoneRecord {
     id: String,
     provider: String,
     name: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct DnsRecordRecord {
     id: String,
     zone_id: String,
@@ -142,7 +147,7 @@ struct DnsRecordRecord {
     proxied: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum DnsRecordType {
     A,
     Aaaa,
@@ -152,7 +157,7 @@ enum DnsRecordType {
     Mx,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct CertificateRecord {
     id: String,
     application_id: Option<String>,
@@ -163,13 +168,13 @@ struct CertificateRecord {
     status: CertificateStatus,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum CertificateChallengeType {
     Http01,
     Dns01,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum CertificateStatus {
     Pending,
     Issued,
@@ -177,15 +182,188 @@ enum CertificateStatus {
     Revoked,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct AuditEventRecord {
     id: String,
     actor: String,
-    action: &'static str,
-    resource_type: &'static str,
+    action: String,
+    resource_type: String,
     resource_id: String,
-    result: &'static str,
+    result: String,
     occurred_at: String,
+}
+
+#[derive(Clone)]
+struct PostgresStateStore {
+    client: Arc<AsyncMutex<Client>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedControlPlaneState {
+    users: HashMap<String, UserAccount>,
+    applications: Vec<ApplicationRecord>,
+    waf_rules: Vec<WafRuleRecord>,
+    rate_limits: Vec<RateLimitRecord>,
+    dns_zones: Vec<DnsZoneRecord>,
+    dns_records: Vec<DnsRecordRecord>,
+    certificates: Vec<CertificateRecord>,
+    audit_events: Vec<AuditEventRecord>,
+}
+
+#[derive(Debug)]
+pub struct PersistenceError {
+    message: String,
+}
+
+impl Display for PersistenceError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PersistenceError {}
+
+impl From<tokio_postgres::Error> for PersistenceError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<serde_json::Error> for PersistenceError {
+    fn from(error: serde_json::Error) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl PostgresStateStore {
+    async fn connect(database_url: &str) -> Result<Self, PersistenceError> {
+        let (client, connection) = tokio_postgres::connect(database_url, NoTls).await?;
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                eprintln!("Postgres state connection failed: {error}");
+            }
+        });
+        let store = Self {
+            client: Arc::new(AsyncMutex::new(client)),
+        };
+        store.ensure_schema().await?;
+        Ok(store)
+    }
+
+    async fn ensure_schema(&self) -> Result<(), PersistenceError> {
+        let mut client = self.client.lock().await;
+        let transaction = client.transaction().await?;
+        transaction
+            .batch_execute(
+                "
+                CREATE TABLE IF NOT EXISTS baia_control_plane_state (
+                    id BOOLEAN PRIMARY KEY DEFAULT TRUE,
+                    state JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT baia_control_plane_state_singleton CHECK (id)
+                )
+                ",
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn load(&self) -> Result<Option<PersistedControlPlaneState>, PersistenceError> {
+        let mut client = self.client.lock().await;
+        let transaction = client.transaction().await?;
+        let row = transaction
+            .query_opt(
+                "SELECT state FROM baia_control_plane_state WHERE id = TRUE",
+                &[],
+            )
+            .await?;
+        let Some(row) = row else {
+            transaction.commit().await?;
+            return Ok(None);
+        };
+        let value: serde_json::Value = row.get(0);
+        let state = serde_json::from_value(value)?;
+        transaction.commit().await?;
+        Ok(Some(state))
+    }
+
+    async fn save(&self, state: &PersistedControlPlaneState) -> Result<(), PersistenceError> {
+        let value = serde_json::to_value(state)?;
+        let mut client = self.client.lock().await;
+        let transaction = client.transaction().await?;
+        transaction
+            .execute(
+                "
+                INSERT INTO baia_control_plane_state (id, state, updated_at)
+                VALUES (TRUE, $1, now())
+                ON CONFLICT (id)
+                DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+                ",
+                &[&value],
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+}
+
+impl AppState {
+    fn snapshot(&self) -> PersistedControlPlaneState {
+        PersistedControlPlaneState {
+            users: self
+                .users
+                .lock()
+                .expect("users lock must not be poisoned")
+                .clone(),
+            applications: self
+                .applications
+                .lock()
+                .expect("applications lock must not be poisoned")
+                .clone(),
+            waf_rules: self
+                .waf_rules
+                .lock()
+                .expect("waf rules lock must not be poisoned")
+                .clone(),
+            rate_limits: self
+                .rate_limits
+                .lock()
+                .expect("rate limits lock must not be poisoned")
+                .clone(),
+            dns_zones: self
+                .dns_zones
+                .lock()
+                .expect("dns zones lock must not be poisoned")
+                .clone(),
+            dns_records: self
+                .dns_records
+                .lock()
+                .expect("dns records lock must not be poisoned")
+                .clone(),
+            certificates: self
+                .certificates
+                .lock()
+                .expect("certificates lock must not be poisoned")
+                .clone(),
+            audit_events: self
+                .audit_events
+                .lock()
+                .expect("audit events lock must not be poisoned")
+                .clone(),
+        }
+    }
+
+    async fn persist(&self) -> Result<(), PersistenceError> {
+        let Some(store) = &self.persistence else {
+            return Ok(());
+        };
+        store.save(&self.snapshot()).await
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -447,10 +625,10 @@ struct AuditEventListResponse {
 struct AuditEventResponse {
     id: String,
     actor: String,
-    action: &'static str,
-    resource_type: &'static str,
+    action: String,
+    resource_type: String,
     resource_id: String,
-    result: &'static str,
+    result: String,
     occurred_at: String,
 }
 
@@ -466,10 +644,12 @@ impl ServerConfig {
             .ok()
             .and_then(|path| ConfigFileStore::new(path).load().ok())
             .unwrap_or_default();
+        let database_url = std::env::var("DATABASE_URL").ok();
 
         Self {
             bind_addr,
             initial_admin_password,
+            database_url,
             secure_cookies: true,
             platform_config,
         }
@@ -479,6 +659,7 @@ impl ServerConfig {
         Self {
             bind_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             initial_admin_password: initial_admin_password.to_string(),
+            database_url: None,
             secure_cookies: true,
             platform_config: PlatformConfig::default(),
         }
@@ -486,6 +667,44 @@ impl ServerConfig {
 }
 
 pub fn build_router(config: ServerConfig) -> Router {
+    build_router_with_persisted_state(config.clone(), initial_control_plane_state(&config), None)
+}
+
+fn build_router_with_persisted_state(
+    config: ServerConfig,
+    persisted: PersistedControlPlaneState,
+    persistence: Option<PostgresStateStore>,
+) -> Router {
+    router_from_state(app_state_from_persisted_state(
+        config,
+        persisted,
+        persistence,
+    ))
+}
+
+fn app_state_from_persisted_state(
+    config: ServerConfig,
+    persisted: PersistedControlPlaneState,
+    persistence: Option<PostgresStateStore>,
+) -> AppState {
+    AppState {
+        users: Arc::new(Mutex::new(persisted.users)),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
+        throttles: Arc::new(Mutex::new(HashMap::new())),
+        applications: Arc::new(Mutex::new(persisted.applications)),
+        waf_rules: Arc::new(Mutex::new(persisted.waf_rules)),
+        rate_limits: Arc::new(Mutex::new(persisted.rate_limits)),
+        dns_zones: Arc::new(Mutex::new(persisted.dns_zones)),
+        dns_records: Arc::new(Mutex::new(persisted.dns_records)),
+        certificates: Arc::new(Mutex::new(persisted.certificates)),
+        audit_events: Arc::new(Mutex::new(persisted.audit_events)),
+        persistence,
+        secure_cookies: config.secure_cookies,
+        platform_config: config.platform_config,
+    }
+}
+
+fn initial_control_plane_state(config: &ServerConfig) -> PersistedControlPlaneState {
     let mut users = HashMap::new();
     users.insert(
         "admin".to_string(),
@@ -497,21 +716,19 @@ pub fn build_router(config: ServerConfig) -> Router {
         },
     );
 
-    let state = AppState {
-        users: Arc::new(Mutex::new(users)),
-        sessions: Arc::new(Mutex::new(HashMap::new())),
-        throttles: Arc::new(Mutex::new(HashMap::new())),
-        applications: Arc::new(Mutex::new(Vec::new())),
-        waf_rules: Arc::new(Mutex::new(Vec::new())),
-        rate_limits: Arc::new(Mutex::new(Vec::new())),
-        dns_zones: Arc::new(Mutex::new(Vec::new())),
-        dns_records: Arc::new(Mutex::new(Vec::new())),
-        certificates: Arc::new(Mutex::new(Vec::new())),
-        audit_events: Arc::new(Mutex::new(Vec::new())),
-        secure_cookies: config.secure_cookies,
-        platform_config: config.platform_config,
-    };
+    PersistedControlPlaneState {
+        users,
+        applications: Vec::new(),
+        waf_rules: Vec::new(),
+        rate_limits: Vec::new(),
+        dns_zones: Vec::new(),
+        dns_records: Vec::new(),
+        certificates: Vec::new(),
+        audit_events: Vec::new(),
+    }
+}
 
+fn router_from_state(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
@@ -542,11 +759,17 @@ pub fn build_router(config: ServerConfig) -> Router {
             get(rate_limits_index).post(rate_limits_create),
         )
         .route("/api/dns/zones", get(dns_zones_index))
-        .route("/api/dns/records", get(dns_records_index).post(dns_records_create))
+        .route(
+            "/api/dns/records",
+            get(dns_records_index).post(dns_records_create),
+        )
         .route("/api/cloudflare/dns/plan", post(authenticated_json))
         .route("/api/cloudflare/dns/apply", post(authenticated_no_content))
         .route("/api/cloudflare/acme-cas", get(authenticated_json))
-        .route("/api/certificates", get(certificates_index).post(certificates_create))
+        .route(
+            "/api/certificates",
+            get(certificates_index).post(certificates_create),
+        )
         .route("/api/crowdsec/decisions", get(authenticated_json))
         .route("/api/audit/events", get(audit_events_index))
         .route("/api/metrics", get(authenticated_json))
@@ -556,7 +779,29 @@ pub fn build_router(config: ServerConfig) -> Router {
 
 pub async fn serve(config: ServerConfig) -> Result<(), std::io::Error> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    axum::serve(listener, build_router(config)).await
+    let router = build_persistent_router(config)
+        .await
+        .map_err(std::io::Error::other)?;
+    axum::serve(listener, router).await
+}
+
+pub async fn build_persistent_router(config: ServerConfig) -> Result<Router, PersistenceError> {
+    let Some(database_url) = config.database_url.clone() else {
+        return Ok(build_router(config));
+    };
+
+    let store = PostgresStateStore::connect(&database_url).await?;
+    let persisted = store
+        .load()
+        .await?
+        .unwrap_or_else(|| initial_control_plane_state(&config));
+    store.save(&persisted).await?;
+
+    Ok(build_router_with_persisted_state(
+        config,
+        persisted,
+        Some(store),
+    ))
 }
 
 async fn health() -> impl IntoResponse {
@@ -687,17 +932,26 @@ async fn change_password(
         );
     }
 
-    let mut users = state.users.lock().expect("users lock must not be poisoned");
-    let Some(user) = users.get_mut(&session.username) else {
-        return error(StatusCode::UNAUTHORIZED, "Authentication required");
-    };
+    {
+        let mut users = state.users.lock().expect("users lock must not be poisoned");
+        let Some(user) = users.get_mut(&session.username) else {
+            return error(StatusCode::UNAUTHORIZED, "Authentication required");
+        };
 
-    if !verify_password(&request.current_password, &user.password_hash) {
-        return error(StatusCode::UNAUTHORIZED, "Invalid username or password");
+        if !verify_password(&request.current_password, &user.password_hash) {
+            return error(StatusCode::UNAUTHORIZED, "Invalid username or password");
+        }
+
+        user.password_hash = hash_password(&request.new_password);
+        user.password_change_required = false;
     }
 
-    user.password_hash = hash_password(&request.new_password);
-    user.password_change_required = false;
+    if state.persist().await.is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "State persistence failed",
+        );
+    }
 
     StatusCode::NO_CONTENT.into_response()
 }
@@ -756,22 +1010,28 @@ async fn applications_create(
     }
 
     let Ok(application) = application_from_request(request) else {
-        return error(StatusCode::UNPROCESSABLE_ENTITY, "Application input is invalid");
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Application input is invalid",
+        );
     };
 
-    let mut applications = state
-        .applications
-        .lock()
-        .expect("applications lock must not be poisoned");
-
-    if applications
-        .iter()
-        .any(|existing| existing.hostname.eq_ignore_ascii_case(&application.hostname))
     {
-        return error(StatusCode::CONFLICT, "Application hostname already exists");
-    }
+        let mut applications = state
+            .applications
+            .lock()
+            .expect("applications lock must not be poisoned");
 
-    applications.push(application.clone());
+        if applications.iter().any(|existing| {
+            existing
+                .hostname
+                .eq_ignore_ascii_case(&application.hostname)
+        }) {
+            return error(StatusCode::CONFLICT, "Application hostname already exists");
+        }
+
+        applications.push(application.clone());
+    }
     record_audit_event(
         &state,
         &session.username,
@@ -780,6 +1040,13 @@ async fn applications_create(
         &application.id,
         "success",
     );
+
+    if state.persist().await.is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "State persistence failed",
+        );
+    }
 
     (StatusCode::CREATED, Json(application_response(application))).into_response()
 }
@@ -814,14 +1081,19 @@ async fn waf_rules_create(
         return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
     }
 
-    let applications = state
-        .applications
-        .lock()
-        .expect("applications lock must not be poisoned");
-    let Ok(rule) = waf_rule_from_request(request, &applications) else {
-        return error(StatusCode::UNPROCESSABLE_ENTITY, "WAF rule input is invalid");
+    let rule = {
+        let applications = state
+            .applications
+            .lock()
+            .expect("applications lock must not be poisoned");
+        let Ok(rule) = waf_rule_from_request(request, &applications) else {
+            return error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "WAF rule input is invalid",
+            );
+        };
+        rule
     };
-    drop(applications);
 
     state
         .waf_rules
@@ -836,6 +1108,13 @@ async fn waf_rules_create(
         &rule.id,
         "success",
     );
+
+    if state.persist().await.is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "State persistence failed",
+        );
+    }
 
     (StatusCode::CREATED, Json(waf_rule_response(rule))).into_response()
 }
@@ -870,14 +1149,19 @@ async fn rate_limits_create(
         return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
     }
 
-    let applications = state
-        .applications
-        .lock()
-        .expect("applications lock must not be poisoned");
-    let Ok(rate_limit) = rate_limit_from_request(request, &applications) else {
-        return error(StatusCode::UNPROCESSABLE_ENTITY, "Rate limit input is invalid");
+    let rate_limit = {
+        let applications = state
+            .applications
+            .lock()
+            .expect("applications lock must not be poisoned");
+        let Ok(rate_limit) = rate_limit_from_request(request, &applications) else {
+            return error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Rate limit input is invalid",
+            );
+        };
+        rate_limit
     };
-    drop(applications);
 
     state
         .rate_limits
@@ -892,6 +1176,13 @@ async fn rate_limits_create(
         &rate_limit.id,
         "success",
     );
+
+    if state.persist().await.is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "State persistence failed",
+        );
+    }
 
     (StatusCode::CREATED, Json(rate_limit_response(rate_limit))).into_response()
 }
@@ -944,17 +1235,21 @@ async fn dns_records_create(
     }
 
     let Ok(mut record) = dns_record_from_request(request) else {
-        return error(StatusCode::UNPROCESSABLE_ENTITY, "DNS record input is invalid");
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "DNS record input is invalid",
+        );
     };
 
-    let mut zones = state
-        .dns_zones
-        .lock()
-        .expect("dns zones lock must not be poisoned");
-    let zone = ensure_dns_zone(&mut zones, &record.zone_name);
-    record.zone_id = zone.id.clone();
-    record.zone_name = zone.name.clone();
-    drop(zones);
+    {
+        let mut zones = state
+            .dns_zones
+            .lock()
+            .expect("dns zones lock must not be poisoned");
+        let zone = ensure_dns_zone(&mut zones, &record.zone_name);
+        record.zone_id = zone.id.clone();
+        record.zone_name = zone.name.clone();
+    }
 
     state
         .dns_records
@@ -969,6 +1264,13 @@ async fn dns_records_create(
         &record.id,
         "success",
     );
+
+    if state.persist().await.is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "State persistence failed",
+        );
+    }
 
     (StatusCode::CREATED, Json(dns_record_response(record))).into_response()
 }
@@ -1006,14 +1308,19 @@ async fn certificates_create(
         return error(StatusCode::FORBIDDEN, "CSRF token is invalid");
     }
 
-    let applications = state
-        .applications
-        .lock()
-        .expect("applications lock must not be poisoned");
-    let Ok(certificate) = certificate_from_request(request, &applications) else {
-        return error(StatusCode::UNPROCESSABLE_ENTITY, "Certificate input is invalid");
+    let certificate = {
+        let applications = state
+            .applications
+            .lock()
+            .expect("applications lock must not be poisoned");
+        let Ok(certificate) = certificate_from_request(request, &applications) else {
+            return error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Certificate input is invalid",
+            );
+        };
+        certificate
     };
-    drop(applications);
 
     state
         .certificates
@@ -1028,6 +1335,13 @@ async fn certificates_create(
         &certificate.id,
         "success",
     );
+
+    if state.persist().await.is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "State persistence failed",
+        );
+    }
 
     (StatusCode::CREATED, Json(certificate_response(certificate))).into_response()
 }
@@ -1212,12 +1526,7 @@ fn resolve_rule_application(
     applications
         .iter()
         .find(|application| application.id == normalized)
-        .map(|application| {
-            (
-                Some(application.id.clone()),
-                Some(application.name.clone()),
-            )
-        })
+        .map(|application| (Some(application.id.clone()), Some(application.name.clone())))
         .ok_or(WafRuleValidationError)
 }
 
@@ -1498,10 +1807,10 @@ fn record_audit_event(
         .push(AuditEventRecord {
             id: random_token(24),
             actor: actor.to_string(),
-            action,
-            resource_type,
+            action: action.to_string(),
+            resource_type: resource_type.to_string(),
             resource_id: resource_id.to_string(),
-            result,
+            result: result.to_string(),
             occurred_at: unix_timestamp_string(),
         });
 }
@@ -1545,7 +1854,9 @@ fn normalized_hostname(value: &str) -> Option<String> {
     let valid = hostname.split('.').all(|label| {
         !label.is_empty()
             && label.len() <= 63
-            && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
             && !label.starts_with('-')
             && !label.ends_with('-')
     });
@@ -1584,7 +1895,10 @@ fn normalized_path_prefix(value: &str) -> Result<Option<String>, WafRuleValidati
 fn normalized_dns_content(value: &str) -> Option<String> {
     let content = value.trim();
 
-    if content.is_empty() || content.len() > 2048 || content.bytes().any(|byte| byte.is_ascii_control()) {
+    if content.is_empty()
+        || content.len() > 2048
+        || content.bytes().any(|byte| byte.is_ascii_control())
+    {
         return None;
     }
 
@@ -1757,4 +2071,157 @@ fn error(status: StatusCode, message: &str) -> Response {
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{Body, to_bytes};
+    use axum::http::header::{COOKIE, SET_COOKIE};
+    use axum::http::{Method, Request};
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn persisted_snapshot_preserves_admin_password_and_applications_after_rebuild() {
+        let config = ServerConfig::for_tests("initial-password");
+        let first_state = app_state_from_persisted_state(
+            config.clone(),
+            initial_control_plane_state(&config),
+            None,
+        );
+        let first = router_from_state(first_state.clone());
+        let authenticated = login_session(&first, "initial-password").await;
+
+        let changed = first
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/auth/change-password")
+                    .header("content-type", "application/json")
+                    .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                    .header("x-csrf-token", authenticated.csrf_token.as_str())
+                    .body(Body::from(
+                        r#"{"currentPassword":"initial-password","newPassword":"Next-password-123!"}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(changed.status(), StatusCode::NO_CONTENT);
+
+        let authenticated = login_session(&first, "Next-password-123!").await;
+        let created = first
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/applications")
+                    .header("content-type", "application/json")
+                    .header(COOKIE, cookie_pair(&authenticated.session_cookie))
+                    .header("x-csrf-token", authenticated.csrf_token.as_str())
+                    .body(Body::from(
+                        r#"{"name":"Portal","hostname":"portal.example.com","upstreams":[{"dial":"10.0.0.20:8080"}]}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(created.status(), StatusCode::CREATED);
+
+        let snapshot = first_state.snapshot();
+        let rebuilt = build_router_with_persisted_state(config, snapshot, None);
+        let initial_login = rebuilt
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/auth/login",
+                r#"{"username":"admin","password":"initial-password"}"#,
+            ))
+            .await
+            .expect("request must complete");
+
+        assert_eq!(initial_login.status(), StatusCode::UNAUTHORIZED);
+
+        let rebuilt_session = login_session(&rebuilt, "Next-password-123!").await;
+        let listed = rebuilt
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/applications")
+                    .header(COOKIE, cookie_pair(&rebuilt_session.session_cookie))
+                    .body(Body::empty())
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+        let body = response_json(listed).await;
+
+        assert_eq!(body["items"][0]["hostname"], "portal.example.com");
+    }
+
+    async fn login_session(app: &Router, password: &str) -> AuthenticatedSession {
+        let login = app
+            .clone()
+            .oneshot(json_request(
+                Method::POST,
+                "/api/auth/login",
+                &format!(r#"{{"username":"admin","password":"{password}"}}"#),
+            ))
+            .await
+            .expect("request must complete");
+
+        assert_eq!(login.status(), StatusCode::OK);
+        let session_cookie = login
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .find_map(|value| {
+                let raw = value.to_str().expect("cookie must be valid ascii");
+                raw.starts_with("baia_session=").then(|| raw.to_string())
+            })
+            .expect("session cookie must be set");
+        let body = response_json(login).await;
+        let csrf_token = body["csrfToken"]
+            .as_str()
+            .expect("csrf token must exist")
+            .to_string();
+
+        AuthenticatedSession {
+            session_cookie,
+            csrf_token,
+        }
+    }
+
+    struct AuthenticatedSession {
+        session_cookie: String,
+        csrf_token: String,
+    }
+
+    fn json_request(method: Method, uri: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request must build")
+    }
+
+    async fn response_json(response: Response) -> Value {
+        let bytes = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body must be readable");
+        serde_json::from_slice(&bytes).expect("response body must be json")
+    }
+
+    fn cookie_pair(set_cookie: &str) -> String {
+        set_cookie
+            .split(';')
+            .next()
+            .expect("cookie pair must exist")
+            .to_string()
+    }
 }

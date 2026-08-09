@@ -42,13 +42,17 @@ Start the stack:
 bun run compose:up
 ```
 
-This starts Compose in detached mode. After Docker finishes building and starting services, the command prints the admin URL, admin user and initial password as the final output lines.
+When the checkout tracks an upstream Git branch and the terminal is interactive, the start command checks GitHub for new commits and asks whether to update with `git pull --ff-only` before starting. The default answer is no.
+
+This starts Compose in detached mode. After Docker finishes building and starting services, the command prints the admin URL, admin user and initial password as the final output lines. The initial password is only valid until the first admin password change.
 
 Stop the stack:
 
 ```sh
 bun run compose:down
 ```
+
+Stopping and starting the stack preserves local runtime files and Postgres-backed control-plane state. Do not use `docker compose down -v` unless you intentionally want to delete local data volumes.
 
 ## First Things To Review
 

@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE cloudflare_dns_change_plans (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     application_id UUID REFERENCES applications(id) ON DELETE SET NULL,
@@ -17,3 +19,5 @@ CREATE TABLE cloudflare_dns_change_plans (
 ALTER TABLE dns_records
     ADD COLUMN provider_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN managed_by_baia BOOLEAN NOT NULL DEFAULT FALSE;
+
+COMMIT;
