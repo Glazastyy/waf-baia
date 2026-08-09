@@ -1,11 +1,9 @@
 import { constants } from 'node:fs';
-import { access, appendFile, readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { runSetup } from './setup';
-import { writeGeneratedCaddyfile } from './caddyfile';
+import { runComposePrepare } from './compose-prepare';
 
 export type ComposeUpOptions = {
   root?: string;
@@ -56,7 +54,7 @@ export async function runComposeUp(options: ComposeUpOptions = {}): Promise<void
     await updateFromGitHubIfRequested(root, writeLine, runCommand, runCommandWithOutput, confirmUpdate);
   }
 
-  const setup = await runSetup({ root });
+  const setup = await runComposePrepare({ root });
 
   for (const file of setup.created) {
     writeLine(`created ${file}`);
@@ -66,9 +64,9 @@ export async function runComposeUp(options: ComposeUpOptions = {}): Promise<void
     writeLine(`preserved ${file}`);
   }
 
-  await ensureInitialAdminPassword(root);
-  const caddyfile = await writeGeneratedCaddyfile(root);
-  writeLine(`generated ${caddyfile}`);
+  for (const file of setup.generated) {
+    writeLine(`generated ${file}`);
+  }
 
   const exitCode = await runCommand(composeCommand, root);
 
@@ -144,20 +142,6 @@ async function updateFromGitHubIfRequested(
   }
 
   writeLine('updated local checkout from GitHub');
-}
-
-async function ensureInitialAdminPassword(root: string): Promise<void> {
-  const secretsPath = join(root, 'config', 'secrets.env');
-  const secrets = await readFile(secretsPath, 'utf8');
-
-  if (parseEnv(secrets).has('BAIA_INITIAL_ADMIN_PASSWORD')) {
-    return;
-  }
-
-  const separator = secrets.endsWith('\n') ? '' : '\n';
-  await appendFile(secretsPath, `${separator}BAIA_INITIAL_ADMIN_PASSWORD=${randomSecret()}\n`, {
-    mode: 0o600
-  });
 }
 
 async function readAccessDetails(root: string): Promise<AccessDetails> {
@@ -241,10 +225,6 @@ function unquote(value: string): string {
   }
 
   return trimmed;
-}
-
-function randomSecret(): string {
-  return randomBytes(32).toString('base64url');
 }
 
 async function runInheritedCommand(command: string[], cwd: string): Promise<number> {
